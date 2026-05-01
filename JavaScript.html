@@ -1,0 +1,302 @@
+<script>
+  const state = {
+    options: { kemahiranBySubject: {} },
+    access: { verified: false, canEnterData: false, canViewAnalytics: true, email: '' },
+    sessions: [],
+    roster: []
+  };
+
+  const el = {
+    dateInput: document.getElementById('dateInput'),
+    sessionSelect: document.getElementById('sessionSelect'),
+    rosterBody: document.getElementById('rosterBody'),
+    accessInfo: document.getElementById('accessInfo'),
+    status: document.getElementById('status')
+  };
+
+  document.getElementById('loadSessionsBtn').addEventListener('click', loadSessions);
+  document.getElementById('loadRosterBtn').addEventListener('click', loadRoster);
+  document.getElementById('saveAttendanceBtn').addEventListener('click', saveAttendance);
+  document.getElementById('markPresentBtn').addEventListener('click', () => markAll('present'));
+  document.getElementById('markAbsentBtn').addEventListener('click', () => markAll('absent'));
+
+  bootstrap();
+
+  function bootstrap() {
+    setStatus('Loading setup...');
+    google.script.run
+      .withSuccessHandler((data) => {
+        state.options = data.options || state.options;
+        state.access = data.access || state.access;
+        el.dateInput.value = data.today;
+        renderAccess();
+        setStatus('Ready. Choose date, then load sessions.');
+      })
+      .withFailureHandler(handleError)
+      .getBootstrapData();
+  }
+
+  function loadSessions() {
+    const date = el.dateInput.value;
+    if (!date) {
+      setStatus('Choose date first.', true);
+      return;
+    }
+
+    setStatus('Loading schedule sessions...');
+    google.script.run
+      .withSuccessHandler((res) => {
+        state.sessions = res.sessions || [];
+        fillSessions();
+        setStatus(`Loaded ${state.sessions.length} session(s).`);
+      })
+      .withFailureHandler(handleError)
+      .getSessions({ date });
+  }
+
+  function fillSessions() {
+    el.sessionSelect.innerHTML = '<option value="">Select session</option>';
+    state.sessions.forEach(s => {
+      const opt = document.createElement('option');
+      opt.value = s.id;
+      const label = `${s.startTime}-${s.endTime} | ${s.subjectCode} ${s.className}`;
+      opt.textContent = label;
+      el.sessionSelect.appendChild(opt);
+    });
+  }
+
+  function loadRoster() {
+    const sessionId = el.sessionSelect.value;
+    if (!sessionId) {
+      setStatus('Select a session first.', true);
+      return;
+    }
+
+    setStatus('Loading attendance roster...');
+    google.script.run
+      .withSuccessHandler((res) => {
+        state.roster = (res.roster || []).map(r => ({
+          ...r,
+          attendanceStatus: r.attendanceStatus || 'present',
+          kemahiranDraft: {
+            kemahiranId: '',
+            masteryLevel: 'developing',
+            score: '',
+            observedInterest: '3',
+            teacherNote: ''
+          }
+        }));
+        renderRoster();
+        applyAccessRules();
+        setStatus(`Roster ready: ${state.roster.length} student(s).`);
+      })
+      .withFailureHandler(handleError)
+      .getAttendanceRoster({ sessionId });
+  }
+
+  function renderRoster() {
+    if (!state.roster.length) {
+      el.rosterBody.innerHTML = '<tr><td colspan="5" class="muted">No students in this session.</td></tr>';
+      return;
+    }
+
+    el.rosterBody.innerHTML = '';
+    state.roster.forEach((row, idx) => {
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td>
+          <strong>${escapeHtml(row.studentName)}</strong>
+          <div class="row-meta">ID: ${escapeHtml(String(row.studentId))}</div>
+        </td>
+        <td>${escapeHtml(row.className || '-')}</td>
+        <td><span class="pill">${escapeHtml(row.subjectCode || '-')}</span></td>
+        <td>
+          <select data-role="attendance" data-idx="${idx}">
+            <option value="present" ${selected(row.attendanceStatus, 'present')}>Present</option>
+            <option value="absent" ${selected(row.attendanceStatus, 'absent')}>Absent</option>
+            <option value="late" ${selected(row.attendanceStatus, 'late')}>Late</option>
+            <option value="excused" ${selected(row.attendanceStatus, 'excused')}>Excused</option>
+          </select>
+        </td>
+        <td>
+          <div class="grid">
+            <select data-role="kemahiran" data-idx="${idx}">
+              <option value="">Kemahiran</option>
+              ${kemahiranOptions(row.subjectId)}
+            </select>
+            <select data-role="mastery" data-idx="${idx}">
+              <option value="not_yet">Not yet</option>
+              <option value="developing" selected>Developing</option>
+              <option value="mastered">Mastered</option>
+            </select>
+            <input data-role="score" data-idx="${idx}" type="number" min="0" max="100" placeholder="Score" />
+            <select data-role="interest" data-idx="${idx}">
+              <option value="1">Interest 1</option>
+              <option value="2">Interest 2</option>
+              <option value="3" selected>Interest 3</option>
+              <option value="4">Interest 4</option>
+              <option value="5">Interest 5</option>
+            </select>
+            <textarea data-role="note" data-idx="${idx}" rows="2" placeholder="Teacher note"></textarea>
+          </div>
+        </td>
+      `;
+      el.rosterBody.appendChild(tr);
+    });
+
+    el.rosterBody.querySelectorAll('select[data-role="attendance"]').forEach(node => {
+      node.addEventListener('change', onAttendanceChange);
+    });
+    el.rosterBody.querySelectorAll('[data-role]').forEach(node => {
+      if (node.dataset.role !== 'attendance') {
+        node.addEventListener('change', onKemahiranDraftChange);
+        if (node.tagName === 'TEXTAREA') {
+          node.addEventListener('input', onKemahiranDraftChange);
+        }
+      }
+    });
+  }
+
+  function onAttendanceChange(e) {
+    const idx = Number(e.target.dataset.idx);
+    state.roster[idx].attendanceStatus = e.target.value;
+  }
+
+  function onKemahiranDraftChange(e) {
+    const idx = Number(e.target.dataset.idx);
+    const role = e.target.dataset.role;
+    const val = e.target.value;
+    if (role === 'kemahiran') state.roster[idx].kemahiranDraft.kemahiranId = val;
+    if (role === 'mastery') state.roster[idx].kemahiranDraft.masteryLevel = val;
+    if (role === 'score') state.roster[idx].kemahiranDraft.score = val;
+    if (role === 'interest') state.roster[idx].kemahiranDraft.observedInterest = val;
+    if (role === 'note') state.roster[idx].kemahiranDraft.teacherNote = val;
+  }
+
+  function markAll(status) {
+    if (!state.access.canEnterData) return;
+    state.roster.forEach(r => r.attendanceStatus = status);
+    el.rosterBody.querySelectorAll('select[data-role="attendance"]').forEach(node => {
+      node.value = status;
+    });
+  }
+
+  function saveAttendance() {
+    if (!state.access.canEnterData) {
+      setStatus('Your account is not verified for data entry.', true);
+      return;
+    }
+    const sessionId = el.sessionSelect.value;
+    if (!sessionId) {
+      setStatus('Select session before saving.', true);
+      return;
+    }
+
+    const records = state.roster.map(r => ({
+      studentId: r.studentId,
+      attendanceStatus: r.attendanceStatus
+    }));
+
+    setStatus('Saving attendance...');
+    google.script.run
+      .withSuccessHandler(() => saveKemahiranBatch(sessionId))
+      .withFailureHandler(handleError)
+      .saveAttendance({ sessionId, records });
+  }
+
+  function saveKemahiranBatch(sessionId) {
+    const attempts = state.roster
+      .filter(r => r.kemahiranDraft.kemahiranId)
+      .map(r => ({
+        studentId: r.studentId,
+        kemahiranId: r.kemahiranDraft.kemahiranId,
+        sessionId,
+        attemptDate: el.dateInput.value,
+        masteryLevel: r.kemahiranDraft.masteryLevel,
+        score: r.kemahiranDraft.score ? Number(r.kemahiranDraft.score) : null,
+        observedInterest: Number(r.kemahiranDraft.observedInterest),
+        teacherNote: r.kemahiranDraft.teacherNote
+      }));
+
+    if (!attempts.length) {
+      setStatus('Attendance saved. No kemahiran attempt selected.');
+      return;
+    }
+
+    setStatus('Saving kemahiran attempts...');
+    runSequential(attempts, (item) => {
+      return new Promise((resolve, reject) => {
+        google.script.run
+          .withSuccessHandler(resolve)
+          .withFailureHandler(reject)
+          .saveKemahiranAttempt(item);
+      });
+    })
+    .then(() => setStatus(`Saved attendance + ${attempts.length} kemahiran attempt(s).`))
+    .catch(handleError);
+  }
+
+  function runSequential(list, handler) {
+    return list.reduce((p, item) => p.then(() => handler(item)), Promise.resolve());
+  }
+
+  function kemahiranOptions(subjectId) {
+    const list = (state.options.kemahiranBySubject || {})[subjectId] || [];
+    return list.map(k => `<option value="${escapeHtml(String(k.id))}">${escapeHtml(k.code + ' - ' + k.title)}</option>`).join('');
+  }
+
+  function selected(current, expected) {
+    return current === expected ? 'selected' : '';
+  }
+
+  function setStatus(msg, isError) {
+    el.status.textContent = msg;
+    el.status.style.color = isError ? '#d64550' : '#6a767d';
+  }
+
+  function renderAccess() {
+    const a = state.access || {};
+    if (!a.email) {
+      el.accessInfo.textContent = 'Access: Read-only (no Google email detected).';
+      el.accessInfo.style.color = '#d64550';
+      applyAccessRules();
+      return;
+    }
+    if (!a.verified || !a.canEnterData) {
+      el.accessInfo.textContent = `Signed in: ${a.email} | Access: Read-only. ${a.reason || ''}`.trim();
+      el.accessInfo.style.color = '#d64550';
+      applyAccessRules();
+      return;
+    }
+    el.accessInfo.textContent = `Signed in: ${a.email} | Access: Verified data entry${a.role ? ' (' + a.role + ')' : ''}.`;
+    el.accessInfo.style.color = '#1f6b46';
+    applyAccessRules();
+  }
+
+  function applyAccessRules() {
+    const disabled = !state.access.canEnterData;
+    const saveBtn = document.getElementById('saveAttendanceBtn');
+    const markPresentBtn = document.getElementById('markPresentBtn');
+    const markAbsentBtn = document.getElementById('markAbsentBtn');
+    saveBtn.disabled = disabled;
+    markPresentBtn.disabled = disabled;
+    markAbsentBtn.disabled = disabled;
+
+    el.rosterBody.querySelectorAll('select[data-role="attendance"], [data-role="kemahiran"], [data-role="mastery"], [data-role="score"], [data-role="interest"], [data-role="note"]')
+      .forEach(node => node.disabled = disabled);
+  }
+
+  function handleError(err) {
+    const message = (err && err.message) ? err.message : String(err);
+    setStatus(message, true);
+  }
+
+  function escapeHtml(value) {
+    return String(value)
+      .replaceAll('&', '&amp;')
+      .replaceAll('<', '&lt;')
+      .replaceAll('>', '&gt;')
+      .replaceAll('"', '&quot;')
+      .replaceAll("'", '&#39;');
+  }
+</script>

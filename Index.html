@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <base target="_top">
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Pemulihan Attendance</title>
+    <style>
+      :root {
+        --bg: #f7f4ee;
+        --card: #fffefb;
+        --ink: #1f2a2e;
+        --muted: #6a767d;
+        --line: #d7d2c8;
+        --brand: #116466;
+        --accent: #ff9f1c;
+        --danger: #d64550;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font-family: "Trebuchet MS", "Segoe UI", sans-serif;
+        background: radial-gradient(circle at top right, #f3e7d3, var(--bg) 50%);
+        color: var(--ink);
+      }
+      .container { max-width: 1100px; margin: 0 auto; padding: 20px; }
+      .card {
+        background: var(--card);
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        padding: 16px;
+        margin-bottom: 14px;
+        box-shadow: 0 6px 20px rgba(17, 100, 102, 0.08);
+      }
+      h1 { margin: 0 0 10px; font-size: 26px; }
+      .muted { color: var(--muted); font-size: 14px; }
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+        gap: 10px;
+      }
+      label { font-size: 13px; color: var(--muted); display: block; margin-bottom: 5px; }
+      input, select, textarea, button {
+        width: 100%;
+        border-radius: 10px;
+        border: 1px solid var(--line);
+        padding: 9px 10px;
+        font: inherit;
+      }
+      button {
+        background: var(--brand);
+        color: white;
+        border: none;
+        cursor: pointer;
+      }
+      button.secondary { background: #63767d; }
+      button.warn { background: var(--accent); color: #2c1b06; }
+      button.danger { background: var(--danger); }
+      .actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 12px; }
+      .actions button { width: auto; min-width: 140px; }
+      table { width: 100%; border-collapse: collapse; margin-top: 12px; }
+      th, td { border-bottom: 1px solid var(--line); padding: 8px; text-align: left; vertical-align: top; }
+      th { font-size: 13px; color: var(--muted); }
+      .pill {
+        display: inline-block;
+        padding: 4px 8px;
+        border-radius: 20px;
+        background: #d8f0e9;
+        color: #1f6b46;
+        font-size: 12px;
+      }
+      .status { margin-top: 8px; font-size: 13px; color: var(--muted); }
+      .access { margin-top: 8px; font-size: 13px; }
+      .hidden { display: none; }
+      .row-meta { font-size: 12px; color: var(--muted); margin-top: 4px; }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <div class="card">
+        <h1>Pemulihan Attendance + Kemahiran</h1>
+        <p class="muted">Attendance sync by class and group (BM/MT), with repeat kemahiran attempts for AI intervention analysis.</p>
+
+        <div class="grid">
+          <div>
+            <label for="dateInput">Date</label>
+            <input id="dateInput" type="date" />
+          </div>
+          <div>
+            <label for="sessionSelect">Session (from schedule)</label>
+            <select id="sessionSelect"></select>
+          </div>
+        </div>
+
+        <div class="actions">
+          <button id="loadSessionsBtn">Load Sessions</button>
+          <button id="loadRosterBtn" class="secondary">Load Roster</button>
+          <button id="saveAttendanceBtn" class="warn">Save Attendance</button>
+        </div>
+        <div id="accessInfo" class="access"></div>
+        <div id="status" class="status"></div>
+      </div>
+
+      <div class="card">
+        <div class="actions">
+          <button id="markPresentBtn" class="secondary">Mark All Present</button>
+          <button id="markAbsentBtn" class="danger">Mark All Absent</button>
+        </div>
+        <table>
+          <thead>
+            <tr>
+              <th>Student</th>
+              <th>Class</th>
+              <th>Group</th>
+              <th>Attendance</th>
+              <th>Kemahiran Log</th>
+            </tr>
+          </thead>
+          <tbody id="rosterBody"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <?!= include('JavaScript'); ?>
+  </body>
+</html>

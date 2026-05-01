@@ -24,6 +24,82 @@ function getBootstrapData() {
   };
 }
 
+function getAttendanceDashboard(payload) {
+  payload = payload || {};
+  var studentId = String(payload.studentId || '').trim();
+  var month = String(payload.month || '').trim(); // yyyy-mm
+  if (!studentId || !month) return { student: null, month: month, subjects: [] };
+
+  var students = readObjects_('students');
+  var student = students.find(function(s) { return String(s.id || '') === studentId; }) || null;
+  if (!student) return { student: null, month: month, subjects: [] };
+
+  var enrollments = readObjects_('student_group_enrollments').filter(function(e) {
+    return String(e.student_id || '') === studentId && toBool_(e.is_active, true);
+  });
+  var subjectCodes = {};
+  enrollments.forEach(function(e) {
+    var code = resolveSubjectCode_(e.subject_id || '');
+    if (code === 'BM' || code === 'MT') subjectCodes[code] = true;
+  });
+
+  var attendance = readObjects_('attendance_records').filter(function(a) {
+    return String(a.student_id || '') === studentId;
+  });
+
+  var kemLog = readObjects_('kemahiran').filter(function(k) {
+    return String(k.student_id || '') === studentId;
+  });
+  var kemMaster = readObjects_('kemahiran_master');
+
+  function calc(code) {
+    var subjectId = resolveSubjectId_(code);
+    var rows = attendance.filter(function(a) {
+      return resolveSubjectCode_(a.subject_id || '') === code;
+    });
+    var monthRows = rows.filter(function(a) {
+      var d = normalizeDateInput_(a.attendance_date || '');
+      return d.slice(0, 7) === month;
+    });
+
+    function summarize(list) {
+      var denom = 0;
+      var hadir = 0;
+      list.forEach(function(r) {
+        var s = String(r.attendance_status || '').toLowerCase();
+        if (s === 'present' || s === 'absent' || s === 'excused' || s === 'late') {
+          denom += 1;
+          if (s === 'present' || s === 'late') hadir += 1;
+        }
+      });
+      return denom ? Math.round((hadir / denom) * 100) : 0;
+    }
+
+    var latest = findLatestKemahiran_(kemLog, kemMaster, code);
+    return {
+      code: code,
+      subjectId: subjectId,
+      selectedPercent: summarize(monthRows),
+      totalPercent: summarize(rows),
+      latestKemahiran: latest
+    };
+  }
+
+  var subjects = [];
+  if (subjectCodes.BM) subjects.push(calc('BM'));
+  if (subjectCodes.MT) subjects.push(calc('MT'));
+
+  return {
+    student: {
+      id: String(student.id || ''),
+      fullName: String(student.full_name || student.name || ''),
+      classId: String(student.class_id || '')
+    },
+    month: month,
+    subjects: subjects
+  };
+}
+
 function getAccessContext() {
   var email = '';
   try {
@@ -226,6 +302,7 @@ function saveAttendance(payload) {
   var sessionId = String(payload.sessionId || '').trim();
   var records = payload.records || [];
   if (!sessionId) throw new Error('Missing sessionId');
+  var parsed = parseSessionId_(sessionId) || {};
 
   var sheet = getSheet_('attendance_records');
   var data = getTable_('attendance_records');
@@ -244,6 +321,9 @@ function saveAttendance(payload) {
     var now = new Date();
     if (idx >= 0) {
       rows[idx].attendance_status = String(r.attendanceStatus || 'present');
+      rows[idx].attendance_date = parsed.date || rows[idx].attendance_date || '';
+      rows[idx].class_id = parsed.classId || rows[idx].class_id || '';
+      rows[idx].subject_id = resolveSubjectId_(parsed.subjectCode || parsed.subjectId || rows[idx].subject_id || '');
       rows[idx].recorded_at = now;
     } else {
       rows.push({
@@ -251,6 +331,11 @@ function saveAttendance(payload) {
         session_id: sessionId,
         student_id: sid,
         attendance_status: String(r.attendanceStatus || 'present'),
+        attendance_date: parsed.date || '',
+        class_id: parsed.classId || '',
+        subject_id: resolveSubjectId_(parsed.subjectCode || parsed.subjectId || ''),
+        checkin_time: '',
+        remarks: '',
         recorded_at: now
       });
     }
@@ -281,7 +366,32 @@ function saveKemahiranAttempt(payload) {
   return { ok: true };
 }
 
+function findLatestKemahiran_(kemLog, kemMaster, code) {
+  var filtered = kemLog.filter(function(k) {
+    var mid = String(k.kemahiran_id || '');
+    var m = kemMaster.find(function(mm) { return String(mm.id || '') === mid; });
+    if (!m) return false;
+    return resolveSubjectCode_(m.subject_id || m.group_code || '') === code;
+  });
+  if (!filtered.length) return '-';
+  filtered.sort(function(a, b) {
+    var da = String(a.created_at || a.attempt_date || '');
+    var db = String(b.created_at || b.attempt_date || '');
+    if (da < db) return 1;
+    if (da > db) return -1;
+    return 0;
+  });
+  var latest = filtered[0];
+  var m2 = kemMaster.find(function(mm) { return String(mm.id || '') === String(latest.kemahiran_id || ''); }) || {};
+  var codeTxt = String(m2.code || '');
+  var title = String(m2.title || latest.kemahiran_id || '-');
+  return codeTxt ? (codeTxt + ' - ' + title) : title;
+}
+
 function getStudentGroupSettings() {
+  var cached = cacheGetJson_('student_group_settings_v1');
+  if (cached) return cached;
+
   var students = readObjects_('students');
   var enrollments = readObjects_('student_group_enrollments').filter(function(e) {
     return toBool_(e.is_active, true);
@@ -296,17 +406,21 @@ function getStudentGroupSettings() {
 
     var hasBM = mine.some(function(e) { return resolveSubjectCode_(e.subject_id || '') === 'BM'; });
     var hasMT = mine.some(function(e) { return resolveSubjectCode_(e.subject_id || '') === 'MT'; });
+    var status = String(s.status || '').toLowerCase();
+    var isPerdana = status === 'perdana';
 
     return {
       studentId: sid,
       fullName: String(s.full_name || ''),
       classId: classId,
       className: resolveClassName_(classId),
-      groupMode: hasBM && hasMT ? 'BOTH' : (hasMT ? 'MT' : 'BM')
+      groupMode: isPerdana ? 'PERDANA' : (hasBM && hasMT ? 'BOTH' : (hasMT ? 'MT' : 'BM'))
     };
   });
 
-  return { rows: rows };
+  var result = { rows: rows };
+  cachePutJson_('student_group_settings_v1', result, 300);
+  return result;
 }
 
 function saveStudentGroupSettings(payload) {
@@ -321,11 +435,16 @@ function saveStudentGroupSettings(payload) {
     var mode = String(r.groupMode || 'BM').toUpperCase();
     if (!sid || !classId) return;
 
-    rows = rows.filter(function(e) {
-      if (String(e.student_id || '') !== sid) return true;
-      if (String(e.class_id || '') !== classId) return true;
+    // End current BM/MT enrollments for this student-class (kept for audit/history).
+    rows = rows.map(function(e) {
+      if (String(e.student_id || '') !== sid) return e;
+      if (String(e.class_id || '') !== classId) return e;
       var sub = resolveSubjectCode_(e.subject_id || '');
-      return sub !== 'BM' && sub !== 'MT';
+      if (sub === 'BM' || sub === 'MT') {
+        e.is_active = false;
+        e.end_date = today_();
+      }
+      return e;
     });
 
     var bmSubjectId = resolveSubjectId_('BM');
@@ -353,10 +472,25 @@ function saveStudentGroupSettings(payload) {
         is_active: true
       });
     }
+
+    updateStudentStatus_(sid, mode === 'PERDANA' ? 'perdana' : 'active');
   });
 
   writeObjects_(getSheet_('student_group_enrollments'), tbl.headers, rows);
+  cacheRemove_('student_group_settings_v1');
   return { ok: true };
+}
+
+function updateStudentStatus_(studentId, status) {
+  var tbl = getTable_('students');
+  var rows = tbl.rows;
+  var idx = rows.findIndex(function(r) { return String(r.id || '') === String(studentId || ''); });
+  if (idx < 0) return;
+  rows[idx].status = status;
+  if (status === 'perdana') {
+    rows[idx].perdana_at = today_();
+  }
+  writeObjects_(getSheet_('students'), tbl.headers, rows);
 }
 
 function addStudent(payload) {
@@ -389,6 +523,7 @@ function addStudent(payload) {
   saveStudentGroupSettings({
     rows: [{ studentId: studentId, classId: classId, groupMode: groupMode }]
   });
+  cacheRemove_('student_group_settings_v1');
   return { ok: true };
 }
 
@@ -408,11 +543,15 @@ function removeStudents(payload) {
     return ids.indexOf(String(r.student_id || '')) < 0;
   });
   writeObjects_(getSheet_('student_group_enrollments'), enrTbl.headers, enrRows);
+  cacheRemove_('student_group_settings_v1');
 
   return { ok: true };
 }
 
 function getTeacherSchedules() {
+  var cached = cacheGetJson_('teacher_schedules_v1');
+  if (cached) return cached;
+
   var rows = readObjects_('teacher_schedules').map(function(r) {
     var classId = String(r.class_id || r.class || r.class_name || '');
     var groupCode = resolveSubjectCode_(r.group_code || r.subject_code || r.subject_id || r.subject || r.group || '');
@@ -427,7 +566,9 @@ function getTeacherSchedules() {
       isActive: toBool_(r.is_active, true)
     };
   });
-  return { rows: rows };
+  var result = { rows: rows };
+  cachePutJson_('teacher_schedules_v1', result, 300);
+  return result;
 }
 
 function saveTeacherSchedules(payload) {
@@ -456,6 +597,7 @@ function saveTeacherSchedules(payload) {
   });
 
   writeObjects_(getSheet_('teacher_schedules'), tbl.headers, rows);
+  cacheRemove_('teacher_schedules_v1');
   return { ok: true };
 }
 
@@ -692,4 +834,28 @@ function parseSessionId_(sessionId) {
     subjectCode: parts[5],
     subjectId: parts[5]
   };
+}
+
+function cacheGetJson_(key) {
+  try {
+    var cache = CacheService.getScriptCache();
+    var raw = cache.get(key);
+    if (!raw) return null;
+    return JSON.parse(raw);
+  } catch (err) {
+    return null;
+  }
+}
+
+function cachePutJson_(key, obj, ttlSeconds) {
+  try {
+    var cache = CacheService.getScriptCache();
+    cache.put(key, JSON.stringify(obj), ttlSeconds || 300);
+  } catch (err) {}
+}
+
+function cacheRemove_(key) {
+  try {
+    CacheService.getScriptCache().remove(key);
+  } catch (err) {}
 }

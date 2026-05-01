@@ -64,7 +64,8 @@
     sessions: [],
     roster: [],
     studentGroupSettings: [],
-    teacherSchedules: []
+    teacherSchedules: [],
+    dashboardData: null
   };
 
   const el = {
@@ -79,17 +80,22 @@
     settingsBody: document.getElementById('settingsBody'),
     settingsStatus: document.getElementById('settingsStatus'),
     scheduleBody: document.getElementById('scheduleBody'),
-    scheduleStatus: document.getElementById('scheduleStatus')
+    scheduleStatus: document.getElementById('scheduleStatus'),
+    dashboardPanel: document.getElementById('dashboardPanel'),
+    dashStudentSelect: document.getElementById('dashStudentSelect'),
+    dashMonthInput: document.getElementById('dashMonthInput'),
+    dashboardCards: document.getElementById('dashboardCards'),
+    dashboardStatus: document.getElementById('dashboardStatus')
   };
 
   document.getElementById('openAttendanceTabBtn').addEventListener('click', () => showPanel('attendance'));
+  document.getElementById('openDashboardTabBtn').addEventListener('click', () => showPanel('dashboard'));
   document.getElementById('openSettingsTabBtn').addEventListener('click', () => showPanel('settings'));
   document.getElementById('openScheduleTabBtn').addEventListener('click', () => showPanel('schedule'));
-  document.getElementById('loadSessionsBtn').addEventListener('click', loadSessions);
-  document.getElementById('loadRosterBtn').addEventListener('click', loadRoster);
   document.getElementById('saveAttendanceBtn').addEventListener('click', saveAttendance);
   document.getElementById('markPresentBtn').addEventListener('click', () => markAll('present'));
   document.getElementById('markAbsentBtn').addEventListener('click', () => markAll('absent'));
+  document.getElementById('markExcusedBtn').addEventListener('click', () => markAll('excused'));
   document.getElementById('loadSettingsBtn').addEventListener('click', loadStudentGroupSettings);
   document.getElementById('addStudentBtn').addEventListener('click', addStudentPrompt);
   document.getElementById('removeStudentsBtn').addEventListener('click', removeSelectedStudents);
@@ -97,18 +103,26 @@
   document.getElementById('loadScheduleBtn').addEventListener('click', loadTeacherSchedules);
   document.getElementById('addScheduleRowBtn').addEventListener('click', addScheduleRow);
   document.getElementById('saveScheduleBtn').addEventListener('click', saveTeacherSchedules);
+  document.getElementById('dashPdfBtn').addEventListener('click', () => window.print());
+  document.getElementById('dashPrintAllBtn').addEventListener('click', printAllStudentsDashboard);
+  el.dateInput.addEventListener('change', loadSessions);
+  el.sessionSelect.addEventListener('change', loadRoster);
+  el.dashStudentSelect.addEventListener('change', loadDashboard);
+  el.dashMonthInput.addEventListener('change', loadDashboard);
 
   bootstrap();
 
   function bootstrap() {
-    setStatus('Loading setup...');
+    setStatus('Memuat tetapan...');
     google.script.run
       .withSuccessHandler((data) => {
         state.options = data.options || state.options;
         state.access = data.access || state.access;
-        el.dateInput.value = isoToDisplayDate(data.today);
+        el.dateInput.value = data.today;
         renderAccess();
-        setStatus('Ready. Choose date, then load sessions.');
+        initDashboardControls();
+        setStatus('Memuat sesi...');
+        loadSessions();
       })
       .withFailureHandler(handleError)
       .getBootstrapData();
@@ -116,30 +130,137 @@
 
   function showPanel(type) {
     el.attendancePanel.classList.toggle('hidden', type !== 'attendance');
+    el.dashboardPanel.classList.toggle('hidden', type !== 'dashboard');
     el.settingsPanel.classList.toggle('hidden', type !== 'settings');
     el.schedulePanel.classList.toggle('hidden', type !== 'schedule');
   }
 
-  function loadSessions() {
-    const date = displayDateToIso(el.dateInput.value);
-    if (!date) {
-      setStatus('Choose date first.', true);
+  function initDashboardControls() {
+    const now = new Date();
+    const m = String(now.getMonth() + 1).padStart(2, '0');
+    el.dashMonthInput.value = `${now.getFullYear()}-${m}`;
+
+    google.script.run
+      .withSuccessHandler((res) => {
+        const rows = res.rows || [];
+        el.dashStudentSelect.innerHTML = '<option value="">Pilih murid</option>';
+        rows.forEach((r) => {
+          const opt = document.createElement('option');
+          opt.value = r.studentId || r.id;
+          opt.textContent = `${r.fullName || r.studentName} (${r.className || r.classId || '-'})`;
+          el.dashStudentSelect.appendChild(opt);
+        });
+        if (rows.length) {
+          el.dashStudentSelect.value = rows[0].studentId || rows[0].id;
+          loadDashboard();
+        }
+      })
+      .withFailureHandler((err) => setDashboardStatus(getErrMsg(err), true))
+      .getStudentGroupSettings();
+  }
+
+  function loadDashboard() {
+    const studentId = el.dashStudentSelect.value;
+    const month = el.dashMonthInput.value;
+    if (!studentId || !month) return;
+    setDashboardStatus('Memuat dashboard...');
+    google.script.run
+      .withSuccessHandler((res) => {
+        state.dashboardData = res;
+        renderDashboard(res);
+        setDashboardStatus('Dashboard siap.');
+      })
+      .withFailureHandler((err) => setDashboardStatus(getErrMsg(err), true))
+      .getAttendanceDashboard({ studentId, month });
+  }
+
+  function renderDashboard(data) {
+    const subjects = (data && data.subjects) ? data.subjects : [];
+    if (!subjects.length) {
+      el.dashboardCards.innerHTML = '<div class="muted">Tiada data subjek untuk murid ini.</div>';
       return;
     }
+    el.dashboardCards.innerHTML = subjects.map((s) => `
+      <div class="card">
+        <h3 class="kpi-title">${escapeHtml(s.code)}</h3>
+        <div class="kpi-boxes">
+          <div class="kpi-box gauge" style="${gaugeStyle(s.selectedPercent)}">
+            <div class="kpi-label">Peratus Bulan Dipilih</div>
+            <div class="kpi-value">${Number(s.selectedPercent || 0)}%</div>
+          </div>
+          <div class="kpi-box gauge" style="${gaugeStyle(s.totalPercent)}">
+            <div class="kpi-label">Peratus Keseluruhan</div>
+            <div class="kpi-value">${Number(s.totalPercent || 0)}%</div>
+          </div>
+        </div>
+        <div><strong>Kemahiran Terkini:</strong> ${escapeHtml(s.latestKemahiran || '-')}</div>
+      </div>
+    `).join('');
+  }
 
-    setStatus('Loading schedule sessions...');
+  function printAllStudentsDashboard() {
+    const opts = Array.from(el.dashStudentSelect.options).filter(o => o.value);
+    if (!opts.length) return;
+    const month = el.dashMonthInput.value;
+    setDashboardStatus('Menjana paparan semua murid...');
+    let html = '<html><head><title>Peratus Kehadiran Semua Murid</title></head><body>';
+    const run = (i) => {
+      if (i >= opts.length) {
+        html += '</body></html>';
+        const w = window.open('', '_blank');
+        w.document.write(html);
+        w.document.close();
+        w.focus();
+        w.print();
+        setDashboardStatus('Selesai jana semua murid.');
+        return;
+      }
+      const sid = opts[i].value;
+      google.script.run
+        .withSuccessHandler((res) => {
+          const name = (res.student && res.student.fullName) ? res.student.fullName : sid;
+          html += `<h2>${escapeHtml(name)} (${escapeHtml(month)})</h2>`;
+          (res.subjects || []).forEach((s) => {
+            html += `<p><strong>${escapeHtml(s.code)}</strong> | Bulan: ${Number(s.selectedPercent || 0)}% | Total: ${Number(s.totalPercent || 0)}% | Kemahiran: ${escapeHtml(s.latestKemahiran || '-')}</p>`;
+          });
+          html += '<hr/>';
+          run(i + 1);
+        })
+        .withFailureHandler(() => run(i + 1))
+        .getAttendanceDashboard({ studentId: sid, month });
+    };
+    run(0);
+  }
+
+  function loadSessions() {
+    let date = el.dateInput.value;
+    if (!date) {
+      const todayIso = new Date().toISOString().slice(0, 10);
+      el.dateInput.value = todayIso;
+      date = todayIso;
+    }
+
+    setStatus('Memuat sesi jadual...');
     google.script.run
       .withSuccessHandler((res) => {
         state.sessions = res.sessions || [];
         fillSessions();
-        setStatus(`Loaded ${state.sessions.length} session(s).`);
+        if (state.sessions.length > 0) {
+          el.sessionSelect.value = state.sessions[0].id;
+          setStatus(`Dimuat ${state.sessions.length} sesi. Memuat senarai murid...`);
+          loadRoster();
+        } else {
+          state.roster = [];
+          renderRoster();
+          setStatus('Tiada sesi untuk tarikh dipilih.');
+        }
       })
       .withFailureHandler(handleError)
       .getSessions({ date });
   }
 
   function fillSessions() {
-    el.sessionSelect.innerHTML = '<option value="">Select session</option>';
+    el.sessionSelect.innerHTML = '<option value="">Pilih sesi</option>';
     state.sessions.forEach(s => {
       const opt = document.createElement('option');
       opt.value = s.id;
@@ -152,11 +273,13 @@
   function loadRoster() {
     const sessionId = el.sessionSelect.value;
     if (!sessionId) {
-      setStatus('Select a session first.', true);
+      state.roster = [];
+      renderRoster();
+      setStatus('Pilih sesi dahulu.', true);
       return;
     }
 
-    setStatus('Loading attendance roster...');
+    setStatus('Memuat senarai kehadiran...');
     google.script.run
       .withSuccessHandler((res) => {
         state.roster = (res.roster || []).map(r => ({
@@ -173,11 +296,11 @@
         renderRoster();
         applyAccessRules();
         if (state.roster.length) {
-          setStatus(`Roster ready: ${state.roster.length} student(s).`);
+          setStatus(`Senarai siap: ${state.roster.length} murid.`);
         } else {
           const d = res.debug || {};
           setStatus(
-            `Roster ready: 0 student(s). Debug -> class:${d.classMatched || 0}, subject:${d.subjectMatched || 0}, date:${d.dateMatched || 0} (active enrollments:${d.enrollmentsActive || 0})`,
+            `Senarai siap: 0 murid. Debug -> kelas:${d.classMatched || 0}, subjek:${d.subjectMatched || 0}, tarikh:${d.dateMatched || 0} (enrolmen aktif:${d.enrollmentsActive || 0})`,
             true
           );
         }
@@ -187,12 +310,12 @@
   }
 
   function loadStudentGroupSettings() {
-    setSettingsStatus('Loading students...');
+    setSettingsStatus('Memuat murid...');
     google.script.run
       .withSuccessHandler((res) => {
         state.studentGroupSettings = res.rows || [];
         renderStudentGroupSettings();
-        setSettingsStatus(`Loaded ${state.studentGroupSettings.length} student(s).`);
+        setSettingsStatus(`Dimuat ${state.studentGroupSettings.length} murid.`);
       })
       .withFailureHandler((err) => setSettingsStatus(getErrMsg(err), true))
       .getStudentGroupSettings();
@@ -200,7 +323,7 @@
 
   function renderStudentGroupSettings() {
     if (!state.studentGroupSettings.length) {
-      el.settingsBody.innerHTML = '<tr><td colspan="4" class="muted">No student data found.</td></tr>';
+      el.settingsBody.innerHTML = '<tr><td colspan="4" class="muted">Tiada data murid dijumpai.</td></tr>';
       return;
     }
     el.settingsBody.innerHTML = '';
@@ -217,7 +340,8 @@
           <select data-role="group-setting" data-idx="${idx}">
             <option value="BM" ${selected(normalizeGroup(row.groupMode), 'BM')}>BM</option>
             <option value="MT" ${selected(normalizeGroup(row.groupMode), 'MT')}>MT</option>
-            <option value="BOTH" ${selected(normalizeGroup(row.groupMode), 'BOTH')}>Both</option>
+            <option value="BOTH" ${selected(normalizeGroup(row.groupMode), 'BOTH')}>Kedua-dua</option>
+            <option value="PERDANA" ${selected(normalizeGroup(row.groupMode), 'PERDANA')}>Perdana</option>
           </select>
         </td>
       `;
@@ -235,7 +359,7 @@
 
   function saveStudentGroupSettings() {
     if (!state.access.canEnterData) {
-      setSettingsStatus('Your account is not verified for data entry.', true);
+      setSettingsStatus('Akaun anda belum disahkan untuk kemasukan data.', true);
       return;
     }
     const rows = state.studentGroupSettings.map((r) => ({
@@ -243,30 +367,30 @@
       classId: r.classId,
       groupMode: normalizeGroup(r.groupMode)
     }));
-    setSettingsStatus('Saving group settings...');
+    setSettingsStatus('Menyimpan tetapan kumpulan...');
     google.script.run
-      .withSuccessHandler(() => setSettingsStatus(`Saved ${rows.length} student group setting(s).`))
+      .withSuccessHandler(() => setSettingsStatus(`Disimpan ${rows.length} tetapan kumpulan murid.`))
       .withFailureHandler((err) => setSettingsStatus(getErrMsg(err), true))
       .saveStudentGroupSettings({ rows });
   }
 
   function addStudentPrompt() {
     if (!state.access.canEnterData) {
-      setSettingsStatus('Your account is not verified for data entry.', true);
+      setSettingsStatus('Akaun anda belum disahkan untuk kemasukan data.', true);
       return;
     }
-    const studentId = (prompt('Student ID (example: S022):') || '').trim();
-    const fullName = (prompt('Student full name:') || '').trim();
-    const classId = (prompt('Class (example: 3 LILY):') || '').trim();
-    const mode = normalizeGroup((prompt('Group: BM / MT / BOTH', 'BM') || 'BM').trim());
+    const studentId = (prompt('ID Murid (contoh: S022):') || '').trim();
+    const fullName = (prompt('Nama penuh murid:') || '').trim();
+    const classId = (prompt('Kelas (contoh: 3 LILY):') || '').trim();
+    const mode = normalizeGroup((prompt('Kumpulan: BM / MT / BOTH / PERDANA', 'BM') || 'BM').trim());
     if (!studentId || !fullName || !classId) {
-      setSettingsStatus('Add student canceled: missing required fields.', true);
+      setSettingsStatus('Tambah murid dibatalkan: maklumat wajib tidak lengkap.', true);
       return;
     }
-    setSettingsStatus('Adding student...');
+    setSettingsStatus('Menambah murid...');
     google.script.run
       .withSuccessHandler(() => {
-        setSettingsStatus(`Student ${studentId} added.`);
+        setSettingsStatus(`Murid ${studentId} berjaya ditambah.`);
         loadStudentGroupSettings();
       })
       .withFailureHandler((err) => setSettingsStatus(getErrMsg(err), true))
@@ -275,24 +399,24 @@
 
   function removeSelectedStudents() {
     if (!state.access.canEnterData) {
-      setSettingsStatus('Your account is not verified for data entry.', true);
+      setSettingsStatus('Akaun anda belum disahkan untuk kemasukan data.', true);
       return;
     }
     const selectedIndexes = Array.from(el.settingsBody.querySelectorAll('input[data-role="student-select"]:checked'))
       .map(node => Number(node.dataset.idx));
     if (!selectedIndexes.length) {
-      setSettingsStatus('Select at least one student to remove.', true);
+      setSettingsStatus('Pilih sekurang-kurangnya satu murid untuk dibuang.', true);
       return;
     }
     const ids = selectedIndexes
       .map(i => state.studentGroupSettings[i] && (state.studentGroupSettings[i].studentId || state.studentGroupSettings[i].id))
       .filter(Boolean);
     if (!ids.length) return;
-    if (!confirm(`Remove ${ids.length} student(s)? This also removes their enrollments.`)) return;
-    setSettingsStatus('Removing students...');
+    if (!confirm(`Buang ${ids.length} murid? Ini juga akan membuang enrolmen mereka.`)) return;
+    setSettingsStatus('Membuang murid...');
     google.script.run
       .withSuccessHandler(() => {
-        setSettingsStatus(`Removed ${ids.length} student(s).`);
+        setSettingsStatus(`${ids.length} murid telah dibuang.`);
         loadStudentGroupSettings();
       })
       .withFailureHandler((err) => setSettingsStatus(getErrMsg(err), true))
@@ -300,7 +424,7 @@
   }
 
   function loadTeacherSchedules() {
-    setScheduleStatus('Loading schedules...');
+    setScheduleStatus('Memuat jadual...');
     google.script.run
       .withSuccessHandler((res) => {
         state.teacherSchedules = (res.rows || []).map((r) => ({
@@ -308,7 +432,7 @@
           groupCode: String(r.groupCode || 'BM').toUpperCase()
         }));
         renderTeacherSchedules();
-        setScheduleStatus(`Loaded ${state.teacherSchedules.length} schedule row(s).`);
+        setScheduleStatus(`Dimuat ${state.teacherSchedules.length} baris jadual.`);
       })
       .withFailureHandler((err) => setScheduleStatus(getErrMsg(err), true))
       .getTeacherSchedules();
@@ -316,7 +440,7 @@
 
   function renderTeacherSchedules() {
     if (!state.teacherSchedules.length) {
-      el.scheduleBody.innerHTML = '<tr><td colspan="6" class="muted">No schedule yet. Click Add Row.</td></tr>';
+      el.scheduleBody.innerHTML = '<tr><td colspan="6" class="muted">Belum ada jadual. Klik Tambah Baris.</td></tr>';
       return;
     }
     el.scheduleBody.innerHTML = '';
@@ -325,7 +449,7 @@
       state.teacherSchedules[idx].groupCode = currentGroup;
       const tr = document.createElement('tr');
       tr.innerHTML = `
-        <td><input data-role="sch-class" data-idx="${idx}" value="${escapeHtml(row.classId || row.className || '')}" placeholder="CLS_3_LILY or 3 LILY" /></td>
+        <td><input data-role="sch-class" data-idx="${idx}" value="${escapeHtml(row.classId || row.className || '')}" placeholder="CLS_3_LILY atau 3 LILY" /></td>
         <td>
           <select data-role="sch-group" data-idx="${idx}">
             <option value="BM" ${selected(currentGroup, 'BM')}>BM</option>
@@ -377,7 +501,7 @@
 
   function saveTeacherSchedules() {
     if (!state.access.canEnterData) {
-      setScheduleStatus('Your account is not verified for data entry.', true);
+      setScheduleStatus('Akaun anda belum disahkan untuk kemasukan data.', true);
       return;
     }
     const rows = state.teacherSchedules
@@ -391,16 +515,16 @@
         endTime: r.endTime,
         isActive: r.isActive !== false
       }));
-    setScheduleStatus('Saving schedules...');
+    setScheduleStatus('Menyimpan jadual...');
     google.script.run
-      .withSuccessHandler(() => setScheduleStatus(`Saved ${rows.length} schedule row(s).`))
+      .withSuccessHandler(() => setScheduleStatus(`Disimpan ${rows.length} baris jadual.`))
       .withFailureHandler((err) => setScheduleStatus(getErrMsg(err), true))
       .saveTeacherSchedules({ rows });
   }
 
   function renderRoster() {
     if (!state.roster.length) {
-      el.rosterBody.innerHTML = '<tr><td colspan="5" class="muted">No students in this session.</td></tr>';
+      el.rosterBody.innerHTML = '<tr><td colspan="5" class="muted">Tiada murid dalam sesi ini.</td></tr>';
       return;
     }
 
@@ -416,10 +540,10 @@
         <td><span class="pill">${escapeHtml(row.subjectCode || '-')}</span></td>
         <td>
           <select data-role="attendance" data-idx="${idx}">
-            <option value="present" ${selected(row.attendanceStatus, 'present')}>Present</option>
-            <option value="absent" ${selected(row.attendanceStatus, 'absent')}>Absent</option>
-            <option value="late" ${selected(row.attendanceStatus, 'late')}>Late</option>
-            <option value="excused" ${selected(row.attendanceStatus, 'excused')}>Excused</option>
+            <option value="present" ${selected(row.attendanceStatus, 'present')}>Hadir</option>
+            <option value="absent" ${selected(row.attendanceStatus, 'absent')}>Tidak Hadir</option>
+            <option value="late" ${selected(row.attendanceStatus, 'late')}>Lewat</option>
+            <option value="excused" ${selected(row.attendanceStatus, 'excused')}>Bersebab</option>
           </select>
         </td>
         <td>
@@ -429,19 +553,19 @@
               ${kemahiranOptions(row.subjectId, row.subjectCode)}
             </select>
             <select data-role="mastery" data-idx="${idx}">
-              <option value="not_yet">Not yet</option>
-              <option value="developing" selected>Developing</option>
-              <option value="mastered">Mastered</option>
+              <option value="not_yet">Belum Kuasai</option>
+              <option value="developing" selected>Sedang Kuasai</option>
+              <option value="mastered">Telah Kuasai</option>
             </select>
-            <input data-role="score" data-idx="${idx}" type="number" min="0" max="100" placeholder="Score" />
+            <input data-role="score" data-idx="${idx}" type="number" min="0" max="100" placeholder="Skor" />
             <select data-role="interest" data-idx="${idx}">
-              <option value="1">Interest 1</option>
-              <option value="2">Interest 2</option>
-              <option value="3" selected>Interest 3</option>
-              <option value="4">Interest 4</option>
-              <option value="5">Interest 5</option>
+              <option value="1">Minat 1</option>
+              <option value="2">Minat 2</option>
+              <option value="3" selected>Minat 3</option>
+              <option value="4">Minat 4</option>
+              <option value="5">Minat 5</option>
             </select>
-            <textarea data-role="note" data-idx="${idx}" rows="2" placeholder="Teacher note"></textarea>
+            <textarea data-role="note" data-idx="${idx}" rows="2" placeholder="Catatan guru"></textarea>
           </div>
         </td>
       `;
@@ -487,12 +611,12 @@
 
   function saveAttendance() {
     if (!state.access.canEnterData) {
-      setStatus('Your account is not verified for data entry.', true);
+      setStatus('Akaun anda belum disahkan untuk kemasukan data.', true);
       return;
     }
     const sessionId = el.sessionSelect.value;
     if (!sessionId) {
-      setStatus('Select session before saving.', true);
+      setStatus('Pilih sesi sebelum simpan.', true);
       return;
     }
 
@@ -501,7 +625,7 @@
       attendanceStatus: r.attendanceStatus
     }));
 
-    setStatus('Saving attendance...');
+    setStatus('Menyimpan kehadiran...');
     google.script.run
       .withSuccessHandler(() => saveKemahiranBatch(sessionId))
       .withFailureHandler(handleError)
@@ -515,7 +639,7 @@
         studentId: r.studentId,
         kemahiranId: r.kemahiranDraft.kemahiranId,
         sessionId,
-        attemptDate: displayDateToIso(el.dateInput.value) || el.dateInput.value,
+        attemptDate: el.dateInput.value,
         masteryLevel: r.kemahiranDraft.masteryLevel,
         score: r.kemahiranDraft.score ? Number(r.kemahiranDraft.score) : null,
         observedInterest: Number(r.kemahiranDraft.observedInterest),
@@ -523,11 +647,11 @@
       }));
 
     if (!attempts.length) {
-      setStatus('Attendance saved. No kemahiran attempt selected.');
+      setStatus('Kehadiran disimpan. Tiada kemahiran dipilih.');
       return;
     }
 
-    setStatus('Saving kemahiran attempts...');
+    setStatus('Menyimpan rekod kemahiran...');
     runSequential(attempts, (item) => {
       return new Promise((resolve, reject) => {
         google.script.run
@@ -536,7 +660,7 @@
           .saveKemahiranAttempt(item);
       });
     })
-    .then(() => setStatus(`Saved attendance + ${attempts.length} kemahiran attempt(s).`))
+    .then(() => setStatus(`Kehadiran disimpan + ${attempts.length} rekod kemahiran.`))
     .catch(handleError);
   }
 
@@ -567,18 +691,18 @@
   function renderAccess() {
     const a = state.access || {};
     if (!a.email) {
-      el.accessInfo.textContent = 'Access: Read-only (no Google email detected).';
+      el.accessInfo.textContent = 'Akses: Lihat sahaja (emel Google tidak dikesan).';
       el.accessInfo.style.color = '#d64550';
       applyAccessRules();
       return;
     }
     if (!a.verified || !a.canEnterData) {
-      el.accessInfo.textContent = `Signed in: ${a.email} | Access: Read-only. ${a.reason || ''}`.trim();
+      el.accessInfo.textContent = `Log masuk: ${a.email} | Akses: Lihat sahaja. ${a.reason || ''}`.trim();
       el.accessInfo.style.color = '#d64550';
       applyAccessRules();
       return;
     }
-    el.accessInfo.textContent = `Signed in: ${a.email} | Access: Verified data entry${a.role ? ' (' + a.role + ')' : ''}.`;
+    el.accessInfo.textContent = `Log masuk: ${a.email} | Akses: Kemasukan data disahkan${a.role ? ' (' + a.role + ')' : ''}.`;
     el.accessInfo.style.color = '#1f6b46';
     applyAccessRules();
   }
@@ -588,6 +712,7 @@
     const saveBtn = document.getElementById('saveAttendanceBtn');
     const markPresentBtn = document.getElementById('markPresentBtn');
     const markAbsentBtn = document.getElementById('markAbsentBtn');
+    const markExcusedBtn = document.getElementById('markExcusedBtn');
     const saveSettingsBtn = document.getElementById('saveSettingsBtn');
     const saveScheduleBtn = document.getElementById('saveScheduleBtn');
     const addScheduleRowBtn = document.getElementById('addScheduleRowBtn');
@@ -596,6 +721,7 @@
     saveBtn.disabled = disabled;
     markPresentBtn.disabled = disabled;
     markAbsentBtn.disabled = disabled;
+    markExcusedBtn.disabled = disabled;
     saveSettingsBtn.disabled = disabled;
     saveScheduleBtn.disabled = disabled;
     addScheduleRowBtn.disabled = disabled;
@@ -619,8 +745,23 @@
     el.scheduleStatus.style.color = isError ? '#d64550' : '#6a767d';
   }
 
+  function setDashboardStatus(msg, isError) {
+    el.dashboardStatus.textContent = msg;
+    el.dashboardStatus.style.color = isError ? '#d64550' : '#6a767d';
+  }
+
+  function gaugeStyle(percent) {
+    const p = Number(percent || 0);
+    // Baseline 10% -> red, 100% -> green
+    const clamped = Math.max(10, Math.min(100, p));
+    const ratio = (clamped - 10) / 90;
+    const hue = Math.round(0 + (120 * ratio)); // 0 red -> 120 green
+    return `background: linear-gradient(135deg, hsla(${hue}, 70%, 88%, 1), hsla(${hue}, 78%, 80%, 1));`;
+  }
+
   function normalizeGroup(mode) {
     const raw = String(mode || '').toUpperCase();
+    if (raw === 'PERDANA') return 'PERDANA';
     if (raw === 'BOTH' || raw === 'BM_MT' || raw === 'BM+MT') return 'BOTH';
     if (raw === 'MT') return 'MT';
     return 'BM';
@@ -632,33 +773,18 @@
 
   function dayOptions(current) {
     const days = [
-      { v: '7', t: 'Sunday' },
-      { v: '1', t: 'Monday' },
-      { v: '2', t: 'Tuesday' },
-      { v: '3', t: 'Wednesday' },
-      { v: '4', t: 'Thursday' },
-      { v: '5', t: 'Friday' },
-      { v: '6', t: 'Saturday' }
+      { v: '7', t: 'Ahad' },
+      { v: '1', t: 'Isnin' },
+      { v: '2', t: 'Selasa' },
+      { v: '3', t: 'Rabu' },
+      { v: '4', t: 'Khamis' },
+      { v: '5', t: 'Jumaat' },
+      { v: '6', t: 'Sabtu' }
     ];
     const now = String(current || '1');
     return days.map(d => `<option value="${d.v}" ${selected(now, d.v)}>${d.t}</option>`).join('');
   }
 
-  function isoToDisplayDate(iso) {
-    const s = String(iso || '').trim();
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
-    const [y, m, d] = s.split('-');
-    return `${d}/${m}/${y}`;
-  }
-
-  function displayDateToIso(display) {
-    const s = String(display || '').trim();
-    if (!s) return '';
-    if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
-    const m = s.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
-    if (m) return `${m[3]}-${m[2]}-${m[1]}`;
-    return '';
-  }
 
   function handleError(err) {
     const message = (err && err.message) ? err.message : String(err);

@@ -75,36 +75,46 @@
       .access { margin-top: 8px; font-size: 13px; }
       .hidden { display: none; }
       .row-meta { font-size: 12px; color: var(--muted); margin-top: 4px; }
+      .kpi-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; }
+      .kpi-title { font-size: 20px; margin: 0 0 8px; }
+      .kpi-boxes { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 8px 0; }
+      .kpi-box { border: 1px solid var(--line); border-radius: 10px; padding: 10px; background: #fff; }
+      .kpi-label { font-size: 12px; color: var(--muted); }
+      .kpi-value { font-size: 24px; font-weight: 700; }
+      .print-area { background: white; }
+      .kpi-box.gauge {
+        color: #132225;
+        border: none;
+      }
     </style>
   </head>
   <body>
     <div class="container">
       <div class="tab-actions">
-        <button id="openAttendanceTabBtn">Attendance</button>
-        <button id="openSettingsTabBtn" class="secondary">Settings: Student Groups</button>
-        <button id="openScheduleTabBtn" class="secondary">Settings: Teacher Schedule</button>
+        <button id="openAttendanceTabBtn">Kehadiran</button>
+        <button id="openDashboardTabBtn" class="secondary">Peratus Kehadiran</button>
+        <button id="openSettingsTabBtn" class="secondary">Tetapan: Kumpulan Murid</button>
+        <button id="openScheduleTabBtn" class="secondary">Tetapan: Jadual Guru</button>
       </div>
 
       <div id="attendancePanel">
       <div class="card">
-        <h1>Pemulihan Attendance + Kemahiran</h1>
-        <p class="muted">Attendance sync by class and group (BM/MT), with repeat kemahiran attempts for AI intervention analysis.</p>
+        <h1>Kehadiran Pemulihan + Kemahiran</h1>
+        <p class="muted">Kehadiran diselaraskan mengikut kelas dan kumpulan (BM/MT), dengan rekod kemahiran berulang untuk analisis intervensi AI.</p>
 
         <div class="grid">
           <div>
-            <label for="dateInput">Date</label>
-            <input id="dateInput" type="text" placeholder="dd/mm/yyyy" />
+            <label for="dateInput">Tarikh</label>
+            <input id="dateInput" type="date" />
           </div>
           <div>
-            <label for="sessionSelect">Session (from schedule)</label>
+            <label for="sessionSelect">Sesi (daripada jadual)</label>
             <select id="sessionSelect"></select>
           </div>
         </div>
 
         <div class="actions">
-          <button id="loadSessionsBtn">Load Sessions</button>
-          <button id="loadRosterBtn" class="secondary">Load Roster</button>
-          <button id="saveAttendanceBtn" class="warn">Save Attendance</button>
+          <button id="saveAttendanceBtn" class="warn">Simpan Kehadiran</button>
         </div>
         <div id="accessInfo" class="access"></div>
         <div id="status" class="status"></div>
@@ -112,17 +122,18 @@
 
       <div class="card">
         <div class="actions">
-          <button id="markPresentBtn" class="secondary">Mark All Present</button>
-          <button id="markAbsentBtn" class="danger">Mark All Absent</button>
+          <button id="markPresentBtn" class="secondary">Semua Hadir</button>
+          <button id="markAbsentBtn" class="danger">Semua Tidak Hadir</button>
+          <button id="markExcusedBtn" class="secondary">Semua Bersebab</button>
         </div>
         <table>
           <thead>
             <tr>
-              <th>Student</th>
-              <th>Class</th>
-              <th>Group</th>
-              <th>Attendance</th>
-              <th>Kemahiran Log</th>
+              <th>Murid</th>
+              <th>Kelas</th>
+              <th>Kumpulan</th>
+              <th>Kehadiran</th>
+              <th>Log Kemahiran</th>
             </tr>
           </thead>
           <tbody id="rosterBody"></tbody>
@@ -130,15 +141,40 @@
       </div>
       </div>
 
+      <div id="dashboardPanel" class="hidden">
+        <div class="card">
+          <h1>Peratus Kehadiran</h1>
+          <div class="grid">
+            <div>
+              <label for="dashStudentSelect">Pilih Murid</label>
+              <select id="dashStudentSelect"></select>
+            </div>
+            <div>
+              <label for="dashMonthInput">Pilih Bulan</label>
+              <input id="dashMonthInput" type="month" />
+            </div>
+          </div>
+          <div class="actions">
+            <button id="dashPdfBtn" class="secondary">PDF / Print</button>
+            <button id="dashPrintAllBtn" class="warn">Print Semua Murid</button>
+          </div>
+          <div id="dashboardStatus" class="status"></div>
+        </div>
+
+        <div id="dashboardPrintArea" class="card print-area">
+          <div id="dashboardCards" class="kpi-grid"></div>
+        </div>
+      </div>
+
       <div id="settingsPanel" class="hidden">
         <div class="card">
-          <h1>Student Group Settings</h1>
-          <p class="muted">Set each student involvement in Pemulihan group: BM, MT, or Both.</p>
+          <h1>Tetapan Kumpulan Murid</h1>
+          <p class="muted">Tetapkan penglibatan setiap murid dalam kumpulan Pemulihan: BM, MT, atau Kedua-dua.</p>
           <div class="actions">
-            <button id="loadSettingsBtn">Load Students</button>
-            <button id="addStudentBtn" class="secondary">+ Add Student</button>
-            <button id="removeStudentsBtn" class="danger">- Remove Selected</button>
-            <button id="saveSettingsBtn" class="warn">Save Group Settings</button>
+            <button id="loadSettingsBtn">Muat Murid</button>
+            <button id="addStudentBtn" class="secondary">+ Tambah Murid</button>
+            <button id="removeStudentsBtn" class="danger">- Buang Pilihan</button>
+            <button id="saveSettingsBtn" class="warn">Simpan Tetapan Kumpulan</button>
           </div>
           <div id="settingsStatus" class="status"></div>
         </div>
@@ -147,10 +183,10 @@
           <table>
             <thead>
               <tr>
-                <th>Select</th>
-                <th>Student</th>
-                <th>Class</th>
-                <th>Group Involvement</th>
+                <th>Pilih</th>
+                <th>Murid</th>
+                <th>Kelas</th>
+                <th>Penglibatan Kumpulan</th>
               </tr>
             </thead>
             <tbody id="settingsBody"></tbody>
@@ -160,12 +196,12 @@
 
       <div id="schedulePanel" class="hidden">
         <div class="card">
-          <h1>Teacher Schedule Settings</h1>
-          <p class="muted">Set recurring schedule by class and group (BM/MT). This drives attendance session loading.</p>
+          <h1>Tetapan Jadual Guru</h1>
+          <p class="muted">Tetapkan jadual berulang mengikut kelas dan kumpulan (BM/MT). Ini menentukan sesi kehadiran.</p>
           <div class="actions">
-            <button id="loadScheduleBtn">Load Schedule</button>
-            <button id="addScheduleRowBtn" class="secondary">Add Row</button>
-            <button id="saveScheduleBtn" class="warn">Save Schedule</button>
+            <button id="loadScheduleBtn">Muat Jadual</button>
+            <button id="addScheduleRowBtn" class="secondary">Tambah Baris</button>
+            <button id="saveScheduleBtn" class="warn">Simpan Jadual</button>
           </div>
           <div id="scheduleStatus" class="status"></div>
         </div>
@@ -174,12 +210,12 @@
           <table>
             <thead>
               <tr>
-                <th>Class</th>
-                <th>Group</th>
-                <th>Day</th>
-                <th>Start</th>
-                <th>End</th>
-                <th>Active</th>
+                <th>Kelas</th>
+                <th>Kumpulan</th>
+                <th>Hari</th>
+                <th>Mula</th>
+                <th>Tamat</th>
+                <th>Aktif</th>
               </tr>
             </thead>
             <tbody id="scheduleBody"></tbody>

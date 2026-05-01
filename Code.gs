@@ -101,7 +101,7 @@ function getOptions_() {
 
 function getSessions(payload) {
   payload = payload || {};
-  var date = String(payload.date || '').trim();
+  var date = normalizeDateInput_(payload.date);
   if (!date) {
     return { sessions: [] };
   }
@@ -114,29 +114,34 @@ function getSessions(payload) {
 
   var sessions = scheduleRows
     .filter(function(r) {
-      var day = Number(r.day_of_week || r.day || 0);
+      var day = normalizeDayOfWeek_(r.day_of_week || r.day);
       if (day && day !== dow) return false;
 
-      var start = String(r.start_date || r.effective_from || '').trim();
-      var end = String(r.end_date || r.effective_to || '').trim();
-      if (start && date < normalizeDateStr_(start)) return false;
-      if (end && date > normalizeDateStr_(end)) return false;
+      var start = toDateKey_(r.start_date || r.effective_from || '');
+      var end = toDateKey_(r.end_date || r.effective_to || '');
+      var current = toDateKey_(date);
+      if (start && current < start) return false;
+      if (end && current > end) return false;
       return true;
     })
     .map(function(r) {
-      var classId = String(r.class_id || r.class || '').trim();
-      var subjectId = String(r.subject_id || '').trim();
-      var subjectCode = String(r.group_code || r.subject_code || subjectId || '').toUpperCase();
+      var classId = String(r.class_id || r.class || r.class_name || '').trim();
+      var subjectId = String(r.subject_id || r.subject || r.group || '').trim();
+      var subjectCode = resolveSubjectCode_(
+        r.group_code || r.subject_code || r.group || r.subject || r.kumpulan || subjectId || ''
+      );
       var className = resolveClassName_(classId);
+      var startTime = normalizeTime_(r.start_time || r.start || '');
+      var endTime = normalizeTime_(r.end_time || r.end || '');
       return {
-        id: buildSessionId_(r.id, date, r.start_time || r.start, classId, subjectCode),
+        id: buildSessionId_(r.id, date, startTime, classId, subjectCode),
         classId: classId,
         className: className || classId,
         subjectId: subjectId || subjectCode,
         subjectCode: subjectCode,
         sessionDate: date,
-        startTime: String(r.start_time || r.start || ''),
-        endTime: String(r.end_time || r.end || '')
+        startTime: startTime,
+        endTime: endTime
       };
     });
 
@@ -151,20 +156,35 @@ function getAttendanceRoster(payload) {
   var parsed = parseSessionId_(sessionId);
   if (!parsed) return { roster: [] };
 
-  var enrollments = readObjects_('student_group_enrollments').filter(function(e) {
+  var classes = readObjects_('classes');
+  var subjects = readObjects_('subjects');
+  var parsedClassId = resolveClassIdWithList_(parsed.classId, classes);
+  var parsedSubjectCode = resolveSubjectCodeWithList_(parsed.subjectCode, subjects);
+
+  var allEnrollments = readObjects_('student_group_enrollments').filter(function(e) {
+    return toBool_(e.is_active, true);
+  });
+  var classMatchedCount = 0;
+  var subjectMatchedCount = 0;
+  var dateMatchedCount = 0;
+
+  var enrollments = allEnrollments.filter(function(e) {
     if (!toBool_(e.is_active, true)) return false;
 
-    var classOk = String(e.class_id || '').trim() === parsed.classId;
-    var subject = String(e.subject_id || '').toUpperCase();
-    var subjectOk = subject === parsed.subjectCode || subject === parsed.subjectId;
+    var classOk = resolveClassIdWithList_(e.class_id, classes) === parsedClassId;
+    if (classOk) classMatchedCount += 1;
+    var subject = resolveSubjectCodeWithList_(e.subject_id || '', subjects);
+    var subjectOk = subject === parsedSubjectCode;
+    if (classOk && subjectOk) subjectMatchedCount += 1;
 
     if (!classOk || !subjectOk) return false;
 
-    var start = String(e.start_date || '').trim();
-    var end = String(e.end_date || '').trim();
-    var d = parsed.date;
-    if (start && d < normalizeDateStr_(start)) return false;
-    if (end && d > normalizeDateStr_(end)) return false;
+    var start = toDateKey_(e.start_date || '');
+    var end = toDateKey_(e.end_date || '');
+    var current = toDateKey_(parsed.date);
+    if (start && current < start) return false;
+    if (end && current > end) return false;
+    dateMatchedCount += 1;
 
     return true;
   });
@@ -189,7 +209,18 @@ function getAttendanceRoster(payload) {
     };
   });
 
-  return { roster: roster };
+  return {
+    roster: roster,
+    debug: {
+      sessionId: sessionId,
+      classId: parsed.classId,
+      subjectCode: parsedSubjectCode,
+      enrollmentsActive: allEnrollments.length,
+      classMatched: classMatchedCount,
+      subjectMatched: subjectMatchedCount,
+      dateMatched: dateMatchedCount
+    }
+  };
 }
 
 function saveAttendance(payload) {
@@ -299,12 +330,15 @@ function saveStudentGroupSettings(payload) {
       return sub !== 'BM' && sub !== 'MT';
     });
 
+    var bmSubjectId = resolveSubjectId_('BM');
+    var mtSubjectId = resolveSubjectId_('MT');
+
     if (mode === 'BM' || mode === 'BOTH') {
       rows.push({
         id: nextId_('ENR', rows),
         student_id: sid,
         class_id: classId,
-        subject_id: 'BM',
+        subject_id: bmSubjectId,
         start_date: today_(),
         end_date: '',
         is_active: true
@@ -315,7 +349,7 @@ function saveStudentGroupSettings(payload) {
         id: nextId_('ENR', rows),
         student_id: sid,
         class_id: classId,
-        subject_id: 'MT',
+        subject_id: mtSubjectId,
         start_date: today_(),
         end_date: '',
         is_active: true
@@ -329,14 +363,16 @@ function saveStudentGroupSettings(payload) {
 
 function getTeacherSchedules() {
   var rows = readObjects_('teacher_schedules').map(function(r) {
+    var classId = String(r.class_id || r.class || r.class_name || '');
+    var groupCode = resolveSubjectCode_(r.group_code || r.subject_code || r.subject_id || r.subject || r.group || '');
     return {
       id: String(r.id || ''),
-      classId: String(r.class_id || ''),
-      className: resolveClassName_(String(r.class_id || '')),
-      groupCode: String(r.group_code || r.subject_code || r.subject_id || '').toUpperCase(),
-      dayOfWeek: String(r.day_of_week || r.day || '1'),
-      startTime: String(r.start_time || r.start || ''),
-      endTime: String(r.end_time || r.end || ''),
+      classId: classId,
+      className: resolveClassName_(classId),
+      groupCode: groupCode,
+      dayOfWeek: String(normalizeDayOfWeek_(r.day_of_week || r.day || '1') || 1),
+      startTime: normalizeTime_(r.start_time || r.start || ''),
+      endTime: normalizeTime_(r.end_time || r.end || ''),
       isActive: toBool_(r.is_active, true)
     };
   });
@@ -351,10 +387,12 @@ function saveTeacherSchedules(payload) {
 
   inputRows.forEach(function(r) {
     var id = String(r.id || '').trim();
+    var normalizedGroup = resolveSubjectCode_(r.groupCode || '');
     var mapped = {
       id: id || nextId_('TS', rows),
       class_id: String(r.classId || ''),
-      group_code: String(r.groupCode || '').toUpperCase(),
+      subject_id: resolveSubjectId_(normalizedGroup),
+      group_code: normalizedGroup,
       day_of_week: Number(r.dayOfWeek || 1),
       start_time: String(r.startTime || ''),
       end_time: String(r.endTime || ''),
@@ -435,8 +473,26 @@ function resolveClassName_(classId) {
   return cls ? String(cls.class_name || cls.id || id) : id;
 }
 
+function resolveClassId_(classRef) {
+  var ref = String(classRef || '').trim();
+  if (!ref) return '';
+  var cls = readObjects_('classes').find(function(c) {
+    return String(c.id || '').trim() === ref || String(c.class_name || '').trim().toUpperCase() === ref.toUpperCase();
+  });
+  return cls ? String(cls.id || ref) : ref;
+}
+
+function isSameClass_(a, b) {
+  var aa = resolveClassId_(a);
+  var bb = resolveClassId_(b);
+  if (aa && bb) return aa === bb;
+  return String(a || '').trim().toUpperCase() === String(b || '').trim().toUpperCase();
+}
+
 function dayOfWeekFromDate_(yyyyMmDd) {
-  var d = new Date(yyyyMmDd + 'T00:00:00');
+  var parts = String(yyyyMmDd).split('-');
+  if (parts.length !== 3) return 0;
+  var d = new Date(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2]));
   var jsDay = d.getDay(); // 0=Sun..6=Sat
   return jsDay === 0 ? 7 : jsDay;
 }
@@ -446,6 +502,105 @@ function normalizeDateStr_(v) {
     return Utilities.formatDate(v, Session.getScriptTimeZone(), 'yyyy-MM-dd');
   }
   return String(v).trim().slice(0, 10);
+}
+
+function normalizeDateInput_(v) {
+  if (!v) return '';
+  if (Object.prototype.toString.call(v) === '[object Date]') {
+    return Utilities.formatDate(v, Session.getScriptTimeZone(), 'yyyy-MM-dd');
+  }
+  var s = String(v).trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  if (/^\d{2}\/\d{2}\/\d{4}$/.test(s)) {
+    var p = s.split('/');
+    return p[2] + '-' + p[1] + '-' + p[0];
+  }
+  return s.slice(0, 10);
+}
+
+function toDateKey_(v) {
+  if (v === null || v === undefined || v === '') return '';
+  if (Object.prototype.toString.call(v) === '[object Date]') {
+    return Utilities.formatDate(v, Session.getScriptTimeZone(), 'yyyyMMdd');
+  }
+  var s = normalizeDateInput_(v); // returns yyyy-mm-dd when possible
+  if (!s || s.length < 10) return '';
+  return s.slice(0, 10).replaceAll('-', '');
+}
+
+function normalizeGroupCode_(v) {
+  var s = String(v || '').toUpperCase();
+  if (s.indexOf('BM') >= 0) return 'BM';
+  if (s.indexOf('MT') >= 0) return 'MT';
+  return s.trim();
+}
+
+function resolveSubjectCode_(v) {
+  var subjects = readObjects_('subjects');
+  return resolveSubjectCodeWithList_(v, subjects);
+}
+
+function resolveSubjectCodeWithList_(v, subjects) {
+  var direct = normalizeGroupCode_(v);
+  if (direct === 'BM' || direct === 'MT') return direct;
+
+  var key = String(v || '').trim();
+  if (!key) return '';
+
+  var match = subjects.find(function(s) {
+    return String(s.id || '').trim() === key || String(s.code || '').trim().toUpperCase() === key.toUpperCase();
+  });
+  if (!match) return direct;
+
+  var viaCode = normalizeGroupCode_(match.code || '');
+  if (viaCode === 'BM' || viaCode === 'MT') return viaCode;
+
+  return normalizeGroupCode_(match.id || '');
+}
+
+function resolveSubjectId_(groupOrSubjectValue) {
+  var subjects = readObjects_('subjects');
+  var normalizedCode = resolveSubjectCodeWithList_(groupOrSubjectValue, subjects);
+  var match = subjects.find(function(s) {
+    return normalizeGroupCode_(s.code || s.id || '') === normalizedCode;
+  });
+  return match ? String(match.id || normalizedCode) : normalizedCode;
+}
+
+function resolveClassIdWithList_(classRef, classes) {
+  var ref = String(classRef || '').trim();
+  if (!ref) return '';
+  var cls = classes.find(function(c) {
+    return String(c.id || '').trim() === ref || String(c.class_name || '').trim().toUpperCase() === ref.toUpperCase();
+  });
+  return cls ? String(cls.id || ref) : ref;
+}
+
+function normalizeDayOfWeek_(v) {
+  var s = String(v || '').trim().toLowerCase();
+  var n = Number(s);
+  if (!isNaN(n) && n >= 1 && n <= 7) return n;
+  var map = {
+    monday: 1, mon: 1, isnin: 1,
+    tuesday: 2, tue: 2, selasa: 2,
+    wednesday: 3, wed: 3, rabu: 3,
+    thursday: 4, thu: 4, khamis: 4,
+    friday: 5, fri: 5, jumaat: 5, jumat: 5,
+    saturday: 6, sat: 6, sabtu: 6,
+    sunday: 7, sun: 7, ahad: 7
+  };
+  return map[s] || 0;
+}
+
+function normalizeTime_(v) {
+  if (Object.prototype.toString.call(v) === '[object Date]') {
+    return Utilities.formatDate(v, Session.getScriptTimeZone(), 'HH:mm');
+  }
+  var s = String(v || '').trim();
+  if (!s) return '';
+  var m = s.match(/^(\d{1,2}):(\d{2})/);
+  if (m) return Utilities.formatString('%02d:%02d', Number(m[1]), Number(m[2]));
+  return s;
 }
 
 function today_() {

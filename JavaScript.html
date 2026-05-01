@@ -141,7 +141,7 @@
     state.sessions.forEach(s => {
       const opt = document.createElement('option');
       opt.value = s.id;
-      const label = `${s.startTime}-${s.endTime} | ${s.subjectCode} ${s.className}`;
+      const label = `${s.className} - ${s.subjectCode}`;
       opt.textContent = label;
       el.sessionSelect.appendChild(opt);
     });
@@ -170,7 +170,15 @@
         }));
         renderRoster();
         applyAccessRules();
-        setStatus(`Roster ready: ${state.roster.length} student(s).`);
+        if (state.roster.length) {
+          setStatus(`Roster ready: ${state.roster.length} student(s).`);
+        } else {
+          const d = res.debug || {};
+          setStatus(
+            `Roster ready: 0 student(s). Debug -> class:${d.classMatched || 0}, subject:${d.subjectMatched || 0}, date:${d.dateMatched || 0} (active enrollments:${d.enrollmentsActive || 0})`,
+            true
+          );
+        }
       })
       .withFailureHandler(handleError)
       .getAttendanceRoster({ sessionId });
@@ -243,7 +251,10 @@
     setScheduleStatus('Loading schedules...');
     google.script.run
       .withSuccessHandler((res) => {
-        state.teacherSchedules = res.rows || [];
+        state.teacherSchedules = (res.rows || []).map((r) => ({
+          ...r,
+          groupCode: String(r.groupCode || 'BM').toUpperCase()
+        }));
         renderTeacherSchedules();
         setScheduleStatus(`Loaded ${state.teacherSchedules.length} schedule row(s).`);
       })
@@ -258,13 +269,15 @@
     }
     el.scheduleBody.innerHTML = '';
     state.teacherSchedules.forEach((row, idx) => {
+      const currentGroup = String(row.groupCode || row.subjectCode || 'BM').toUpperCase();
+      state.teacherSchedules[idx].groupCode = currentGroup;
       const tr = document.createElement('tr');
       tr.innerHTML = `
         <td><input data-role="sch-class" data-idx="${idx}" value="${escapeHtml(row.classId || row.className || '')}" placeholder="CLS_3_LILY or 3 LILY" /></td>
         <td>
           <select data-role="sch-group" data-idx="${idx}">
-            <option value="BM" ${selected(String(row.groupCode || row.subjectCode || '').toUpperCase(), 'BM')}>BM</option>
-            <option value="MT" ${selected(String(row.groupCode || row.subjectCode || '').toUpperCase(), 'MT')}>MT</option>
+            <option value="BM" ${selected(currentGroup, 'BM')}>BM</option>
+            <option value="MT" ${selected(currentGroup, 'MT')}>MT</option>
           </select>
         </td>
         <td>
@@ -320,7 +333,7 @@
       .map(r => ({
         id: r.id || '',
         classId: r.classId,
-        groupCode: String(r.groupCode).toUpperCase(),
+        groupCode: String(r.groupCode || 'BM').toUpperCase(),
         dayOfWeek: Number(r.dayOfWeek),
         startTime: r.startTime,
         endTime: r.endTime,

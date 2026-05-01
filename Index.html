@@ -4,7 +4,7 @@
     <base target="_top">
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Pemulihan Attendance</title>
+    <title>Pemulihan Managers</title>
     <style>
       :root {
         --bg: #f7f4ee;
@@ -93,7 +93,7 @@
         <div class="grid">
           <div>
             <label for="dateInput">Date</label>
-            <input id="dateInput" type="date" />
+            <input id="dateInput" type="text" placeholder="dd/mm/yyyy" />
           </div>
           <div>
             <label for="sessionSelect">Session (from schedule)</label>
@@ -136,6 +136,8 @@
           <p class="muted">Set each student involvement in Pemulihan group: BM, MT, or Both.</p>
           <div class="actions">
             <button id="loadSettingsBtn">Load Students</button>
+            <button id="addStudentBtn" class="secondary">+ Add Student</button>
+            <button id="removeStudentsBtn" class="danger">- Remove Selected</button>
             <button id="saveSettingsBtn" class="warn">Save Group Settings</button>
           </div>
           <div id="settingsStatus" class="status"></div>
@@ -145,6 +147,7 @@
           <table>
             <thead>
               <tr>
+                <th>Select</th>
                 <th>Student</th>
                 <th>Class</th>
                 <th>Group Involvement</th>

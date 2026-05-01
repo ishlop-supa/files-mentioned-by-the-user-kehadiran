@@ -91,6 +91,8 @@
   document.getElementById('markPresentBtn').addEventListener('click', () => markAll('present'));
   document.getElementById('markAbsentBtn').addEventListener('click', () => markAll('absent'));
   document.getElementById('loadSettingsBtn').addEventListener('click', loadStudentGroupSettings);
+  document.getElementById('addStudentBtn').addEventListener('click', addStudentPrompt);
+  document.getElementById('removeStudentsBtn').addEventListener('click', removeSelectedStudents);
   document.getElementById('saveSettingsBtn').addEventListener('click', saveStudentGroupSettings);
   document.getElementById('loadScheduleBtn').addEventListener('click', loadTeacherSchedules);
   document.getElementById('addScheduleRowBtn').addEventListener('click', addScheduleRow);
@@ -104,7 +106,7 @@
       .withSuccessHandler((data) => {
         state.options = data.options || state.options;
         state.access = data.access || state.access;
-        el.dateInput.value = data.today;
+        el.dateInput.value = isoToDisplayDate(data.today);
         renderAccess();
         setStatus('Ready. Choose date, then load sessions.');
       })
@@ -119,7 +121,7 @@
   }
 
   function loadSessions() {
-    const date = el.dateInput.value;
+    const date = displayDateToIso(el.dateInput.value);
     if (!date) {
       setStatus('Choose date first.', true);
       return;
@@ -198,13 +200,14 @@
 
   function renderStudentGroupSettings() {
     if (!state.studentGroupSettings.length) {
-      el.settingsBody.innerHTML = '<tr><td colspan="3" class="muted">No student data found.</td></tr>';
+      el.settingsBody.innerHTML = '<tr><td colspan="4" class="muted">No student data found.</td></tr>';
       return;
     }
     el.settingsBody.innerHTML = '';
     state.studentGroupSettings.forEach((row, idx) => {
       const tr = document.createElement('tr');
       tr.innerHTML = `
+        <td><input type="checkbox" data-role="student-select" data-idx="${idx}" /></td>
         <td>
           <strong>${escapeHtml(row.fullName || row.studentName || '')}</strong>
           <div class="row-meta">ID: ${escapeHtml(String(row.studentId || row.id || ''))}</div>
@@ -245,6 +248,55 @@
       .withSuccessHandler(() => setSettingsStatus(`Saved ${rows.length} student group setting(s).`))
       .withFailureHandler((err) => setSettingsStatus(getErrMsg(err), true))
       .saveStudentGroupSettings({ rows });
+  }
+
+  function addStudentPrompt() {
+    if (!state.access.canEnterData) {
+      setSettingsStatus('Your account is not verified for data entry.', true);
+      return;
+    }
+    const studentId = (prompt('Student ID (example: S022):') || '').trim();
+    const fullName = (prompt('Student full name:') || '').trim();
+    const classId = (prompt('Class (example: 3 LILY):') || '').trim();
+    const mode = normalizeGroup((prompt('Group: BM / MT / BOTH', 'BM') || 'BM').trim());
+    if (!studentId || !fullName || !classId) {
+      setSettingsStatus('Add student canceled: missing required fields.', true);
+      return;
+    }
+    setSettingsStatus('Adding student...');
+    google.script.run
+      .withSuccessHandler(() => {
+        setSettingsStatus(`Student ${studentId} added.`);
+        loadStudentGroupSettings();
+      })
+      .withFailureHandler((err) => setSettingsStatus(getErrMsg(err), true))
+      .addStudent({ studentId, fullName, classId, groupMode: mode });
+  }
+
+  function removeSelectedStudents() {
+    if (!state.access.canEnterData) {
+      setSettingsStatus('Your account is not verified for data entry.', true);
+      return;
+    }
+    const selectedIndexes = Array.from(el.settingsBody.querySelectorAll('input[data-role="student-select"]:checked'))
+      .map(node => Number(node.dataset.idx));
+    if (!selectedIndexes.length) {
+      setSettingsStatus('Select at least one student to remove.', true);
+      return;
+    }
+    const ids = selectedIndexes
+      .map(i => state.studentGroupSettings[i] && (state.studentGroupSettings[i].studentId || state.studentGroupSettings[i].id))
+      .filter(Boolean);
+    if (!ids.length) return;
+    if (!confirm(`Remove ${ids.length} student(s)? This also removes their enrollments.`)) return;
+    setSettingsStatus('Removing students...');
+    google.script.run
+      .withSuccessHandler(() => {
+        setSettingsStatus(`Removed ${ids.length} student(s).`);
+        loadStudentGroupSettings();
+      })
+      .withFailureHandler((err) => setSettingsStatus(getErrMsg(err), true))
+      .removeStudents({ studentIds: ids });
   }
 
   function loadTeacherSchedules() {
@@ -463,7 +515,7 @@
         studentId: r.studentId,
         kemahiranId: r.kemahiranDraft.kemahiranId,
         sessionId,
-        attemptDate: el.dateInput.value,
+        attemptDate: displayDateToIso(el.dateInput.value) || el.dateInput.value,
         masteryLevel: r.kemahiranDraft.masteryLevel,
         score: r.kemahiranDraft.score ? Number(r.kemahiranDraft.score) : null,
         observedInterest: Number(r.kemahiranDraft.observedInterest),
@@ -539,16 +591,21 @@
     const saveSettingsBtn = document.getElementById('saveSettingsBtn');
     const saveScheduleBtn = document.getElementById('saveScheduleBtn');
     const addScheduleRowBtn = document.getElementById('addScheduleRowBtn');
+    const addStudentBtn = document.getElementById('addStudentBtn');
+    const removeStudentsBtn = document.getElementById('removeStudentsBtn');
     saveBtn.disabled = disabled;
     markPresentBtn.disabled = disabled;
     markAbsentBtn.disabled = disabled;
     saveSettingsBtn.disabled = disabled;
     saveScheduleBtn.disabled = disabled;
     addScheduleRowBtn.disabled = disabled;
+    addStudentBtn.disabled = disabled;
+    removeStudentsBtn.disabled = disabled;
 
     el.rosterBody.querySelectorAll('select[data-role="attendance"], [data-role="kemahiran"], [data-role="mastery"], [data-role="score"], [data-role="interest"], [data-role="note"]')
       .forEach(node => node.disabled = disabled);
     el.settingsBody.querySelectorAll('select[data-role="group-setting"]').forEach(node => node.disabled = disabled);
+    el.settingsBody.querySelectorAll('input[data-role="student-select"]').forEach(node => node.disabled = disabled);
     el.scheduleBody.querySelectorAll('[data-role^="sch-"]').forEach(node => node.disabled = disabled);
   }
 
@@ -575,16 +632,32 @@
 
   function dayOptions(current) {
     const days = [
+      { v: '7', t: 'Sunday' },
       { v: '1', t: 'Monday' },
       { v: '2', t: 'Tuesday' },
       { v: '3', t: 'Wednesday' },
       { v: '4', t: 'Thursday' },
       { v: '5', t: 'Friday' },
-      { v: '6', t: 'Saturday' },
-      { v: '7', t: 'Sunday' }
+      { v: '6', t: 'Saturday' }
     ];
     const now = String(current || '1');
     return days.map(d => `<option value="${d.v}" ${selected(now, d.v)}>${d.t}</option>`).join('');
+  }
+
+  function isoToDisplayDate(iso) {
+    const s = String(iso || '').trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+    const [y, m, d] = s.split('-');
+    return `${d}/${m}/${y}`;
+  }
+
+  function displayDateToIso(display) {
+    const s = String(display || '').trim();
+    if (!s) return '';
+    if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+    const m = s.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+    if (m) return `${m[3]}-${m[2]}-${m[1]}`;
+    return '';
   }
 
   function handleError(err) {

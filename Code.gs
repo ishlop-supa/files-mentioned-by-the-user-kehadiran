@@ -117,11 +117,10 @@ function getSessions(payload) {
       var day = normalizeDayOfWeek_(r.day_of_week || r.day);
       if (day && day !== dow) return false;
 
-      var start = toDateKey_(r.start_date || r.effective_from || '');
-      var end = toDateKey_(r.end_date || r.effective_to || '');
-      var current = toDateKey_(date);
-      if (start && current < start) return false;
-      if (end && current > end) return false;
+      var start = String(r.start_date || r.effective_from || '').trim();
+      var end = String(r.end_date || r.effective_to || '').trim();
+      if (start && date < normalizeDateStr_(start)) return false;
+      if (end && date > normalizeDateStr_(end)) return false;
       return true;
     })
     .map(function(r) {
@@ -179,12 +178,11 @@ function getAttendanceRoster(payload) {
 
     if (!classOk || !subjectOk) return false;
 
-    var start = toDateKey_(e.start_date || '');
-    var end = toDateKey_(e.end_date || '');
-    var current = toDateKey_(parsed.date);
-    if (start && current < start) return false;
-    if (end && current > end) return false;
-    dateMatchedCount += 1;
+    var start = String(e.start_date || '').trim();
+    var end = String(e.end_date || '').trim();
+    var d = parsed.date;
+    if (start && d < normalizeDateStr_(start)) return false;
+    if (end && d > normalizeDateStr_(end)) return false;
 
     return true;
   });
@@ -296,8 +294,8 @@ function getStudentGroupSettings() {
       return String(e.student_id || '') === sid && String(e.class_id || '') === classId;
     });
 
-    var hasBM = mine.some(function(e) { return String(e.subject_id || '').toUpperCase() === 'BM'; });
-    var hasMT = mine.some(function(e) { return String(e.subject_id || '').toUpperCase() === 'MT'; });
+    var hasBM = mine.some(function(e) { return resolveSubjectCode_(e.subject_id || '') === 'BM'; });
+    var hasMT = mine.some(function(e) { return resolveSubjectCode_(e.subject_id || '') === 'MT'; });
 
     return {
       studentId: sid,
@@ -326,7 +324,7 @@ function saveStudentGroupSettings(payload) {
     rows = rows.filter(function(e) {
       if (String(e.student_id || '') !== sid) return true;
       if (String(e.class_id || '') !== classId) return true;
-      var sub = String(e.subject_id || '').toUpperCase();
+      var sub = resolveSubjectCode_(e.subject_id || '');
       return sub !== 'BM' && sub !== 'MT';
     });
 
@@ -358,6 +356,59 @@ function saveStudentGroupSettings(payload) {
   });
 
   writeObjects_(getSheet_('student_group_enrollments'), tbl.headers, rows);
+  return { ok: true };
+}
+
+function addStudent(payload) {
+  payload = payload || {};
+  var studentId = String(payload.studentId || '').trim();
+  var fullName = String(payload.fullName || '').trim();
+  var classId = String(payload.classId || '').trim();
+  var groupMode = String(payload.groupMode || 'BM').toUpperCase();
+  if (!studentId || !fullName || !classId) {
+    throw new Error('studentId, fullName, and classId are required');
+  }
+
+  var tbl = getTable_('students');
+  var rows = tbl.rows;
+  var idx = rows.findIndex(function(r) { return String(r.id || '') === studentId; });
+  if (idx >= 0) {
+    rows[idx].full_name = fullName;
+    rows[idx].class_id = classId;
+    rows[idx].status = rows[idx].status || 'active';
+  } else {
+    rows.push({
+      id: studentId,
+      full_name: fullName,
+      class_id: classId,
+      status: 'active'
+    });
+  }
+  writeObjects_(getSheet_('students'), tbl.headers, rows);
+
+  saveStudentGroupSettings({
+    rows: [{ studentId: studentId, classId: classId, groupMode: groupMode }]
+  });
+  return { ok: true };
+}
+
+function removeStudents(payload) {
+  payload = payload || {};
+  var ids = (payload.studentIds || []).map(function(x) { return String(x || '').trim(); }).filter(Boolean);
+  if (!ids.length) return { ok: true };
+
+  var studentsTbl = getTable_('students');
+  var studentsRows = studentsTbl.rows.filter(function(r) {
+    return ids.indexOf(String(r.id || '')) < 0;
+  });
+  writeObjects_(getSheet_('students'), studentsTbl.headers, studentsRows);
+
+  var enrTbl = getTable_('student_group_enrollments');
+  var enrRows = enrTbl.rows.filter(function(r) {
+    return ids.indexOf(String(r.student_id || '')) < 0;
+  });
+  writeObjects_(getSheet_('student_group_enrollments'), enrTbl.headers, enrRows);
+
   return { ok: true };
 }
 

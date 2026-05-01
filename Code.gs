@@ -192,11 +192,6 @@ function getSessions(payload) {
     .filter(function(r) {
       var day = normalizeDayOfWeek_(r.day_of_week || r.day);
       if (day && day !== dow) return false;
-
-      var start = String(r.start_date || r.effective_from || '').trim();
-      var end = String(r.end_date || r.effective_to || '').trim();
-      if (start && date < normalizeDateStr_(start)) return false;
-      if (end && date > normalizeDateStr_(end)) return false;
       return true;
     })
     .map(function(r) {
@@ -254,11 +249,9 @@ function getAttendanceRoster(payload) {
 
     if (!classOk || !subjectOk) return false;
 
-    var start = String(e.start_date || '').trim();
-    var end = String(e.end_date || '').trim();
-    var d = parsed.date;
-    if (start && d < normalizeDateStr_(start)) return false;
-    if (end && d > normalizeDateStr_(end)) return false;
+    // Enrollment date range intentionally ignored.
+    // Roster is driven by class + group + active enrollment.
+    dateMatchedCount += 1;
 
     return true;
   });

@@ -62,7 +62,9 @@
     options: { kemahiranBySubject: {} },
     access: { verified: false, canEnterData: false, canViewAnalytics: true, email: '' },
     sessions: [],
-    roster: []
+    roster: [],
+    studentGroupSettings: [],
+    teacherSchedules: []
   };
 
   const el = {
@@ -70,14 +72,29 @@
     sessionSelect: document.getElementById('sessionSelect'),
     rosterBody: document.getElementById('rosterBody'),
     accessInfo: document.getElementById('accessInfo'),
-    status: document.getElementById('status')
+    status: document.getElementById('status'),
+    attendancePanel: document.getElementById('attendancePanel'),
+    settingsPanel: document.getElementById('settingsPanel'),
+    schedulePanel: document.getElementById('schedulePanel'),
+    settingsBody: document.getElementById('settingsBody'),
+    settingsStatus: document.getElementById('settingsStatus'),
+    scheduleBody: document.getElementById('scheduleBody'),
+    scheduleStatus: document.getElementById('scheduleStatus')
   };
 
+  document.getElementById('openAttendanceTabBtn').addEventListener('click', () => showPanel('attendance'));
+  document.getElementById('openSettingsTabBtn').addEventListener('click', () => showPanel('settings'));
+  document.getElementById('openScheduleTabBtn').addEventListener('click', () => showPanel('schedule'));
   document.getElementById('loadSessionsBtn').addEventListener('click', loadSessions);
   document.getElementById('loadRosterBtn').addEventListener('click', loadRoster);
   document.getElementById('saveAttendanceBtn').addEventListener('click', saveAttendance);
   document.getElementById('markPresentBtn').addEventListener('click', () => markAll('present'));
   document.getElementById('markAbsentBtn').addEventListener('click', () => markAll('absent'));
+  document.getElementById('loadSettingsBtn').addEventListener('click', loadStudentGroupSettings);
+  document.getElementById('saveSettingsBtn').addEventListener('click', saveStudentGroupSettings);
+  document.getElementById('loadScheduleBtn').addEventListener('click', loadTeacherSchedules);
+  document.getElementById('addScheduleRowBtn').addEventListener('click', addScheduleRow);
+  document.getElementById('saveScheduleBtn').addEventListener('click', saveTeacherSchedules);
 
   bootstrap();
 
@@ -93,6 +110,12 @@
       })
       .withFailureHandler(handleError)
       .getBootstrapData();
+  }
+
+  function showPanel(type) {
+    el.attendancePanel.classList.toggle('hidden', type !== 'attendance');
+    el.settingsPanel.classList.toggle('hidden', type !== 'settings');
+    el.schedulePanel.classList.toggle('hidden', type !== 'schedule');
   }
 
   function loadSessions() {
@@ -151,6 +174,163 @@
       })
       .withFailureHandler(handleError)
       .getAttendanceRoster({ sessionId });
+  }
+
+  function loadStudentGroupSettings() {
+    setSettingsStatus('Loading students...');
+    google.script.run
+      .withSuccessHandler((res) => {
+        state.studentGroupSettings = res.rows || [];
+        renderStudentGroupSettings();
+        setSettingsStatus(`Loaded ${state.studentGroupSettings.length} student(s).`);
+      })
+      .withFailureHandler((err) => setSettingsStatus(getErrMsg(err), true))
+      .getStudentGroupSettings();
+  }
+
+  function renderStudentGroupSettings() {
+    if (!state.studentGroupSettings.length) {
+      el.settingsBody.innerHTML = '<tr><td colspan="3" class="muted">No student data found.</td></tr>';
+      return;
+    }
+    el.settingsBody.innerHTML = '';
+    state.studentGroupSettings.forEach((row, idx) => {
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td>
+          <strong>${escapeHtml(row.fullName || row.studentName || '')}</strong>
+          <div class="row-meta">ID: ${escapeHtml(String(row.studentId || row.id || ''))}</div>
+        </td>
+        <td>${escapeHtml(row.className || row.classId || '-')}</td>
+        <td>
+          <select data-role="group-setting" data-idx="${idx}">
+            <option value="BM" ${selected(normalizeGroup(row.groupMode), 'BM')}>BM</option>
+            <option value="MT" ${selected(normalizeGroup(row.groupMode), 'MT')}>MT</option>
+            <option value="BOTH" ${selected(normalizeGroup(row.groupMode), 'BOTH')}>Both</option>
+          </select>
+        </td>
+      `;
+      el.settingsBody.appendChild(tr);
+    });
+    el.settingsBody.querySelectorAll('select[data-role="group-setting"]').forEach((node) => {
+      node.addEventListener('change', onGroupSettingChange);
+    });
+  }
+
+  function onGroupSettingChange(e) {
+    const idx = Number(e.target.dataset.idx);
+    state.studentGroupSettings[idx].groupMode = e.target.value;
+  }
+
+  function saveStudentGroupSettings() {
+    if (!state.access.canEnterData) {
+      setSettingsStatus('Your account is not verified for data entry.', true);
+      return;
+    }
+    const rows = state.studentGroupSettings.map((r) => ({
+      studentId: r.studentId || r.id,
+      classId: r.classId,
+      groupMode: normalizeGroup(r.groupMode)
+    }));
+    setSettingsStatus('Saving group settings...');
+    google.script.run
+      .withSuccessHandler(() => setSettingsStatus(`Saved ${rows.length} student group setting(s).`))
+      .withFailureHandler((err) => setSettingsStatus(getErrMsg(err), true))
+      .saveStudentGroupSettings({ rows });
+  }
+
+  function loadTeacherSchedules() {
+    setScheduleStatus('Loading schedules...');
+    google.script.run
+      .withSuccessHandler((res) => {
+        state.teacherSchedules = res.rows || [];
+        renderTeacherSchedules();
+        setScheduleStatus(`Loaded ${state.teacherSchedules.length} schedule row(s).`);
+      })
+      .withFailureHandler((err) => setScheduleStatus(getErrMsg(err), true))
+      .getTeacherSchedules();
+  }
+
+  function renderTeacherSchedules() {
+    if (!state.teacherSchedules.length) {
+      el.scheduleBody.innerHTML = '<tr><td colspan="6" class="muted">No schedule yet. Click Add Row.</td></tr>';
+      return;
+    }
+    el.scheduleBody.innerHTML = '';
+    state.teacherSchedules.forEach((row, idx) => {
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td><input data-role="sch-class" data-idx="${idx}" value="${escapeHtml(row.classId || row.className || '')}" placeholder="CLS_3_LILY or 3 LILY" /></td>
+        <td>
+          <select data-role="sch-group" data-idx="${idx}">
+            <option value="BM" ${selected(String(row.groupCode || row.subjectCode || '').toUpperCase(), 'BM')}>BM</option>
+            <option value="MT" ${selected(String(row.groupCode || row.subjectCode || '').toUpperCase(), 'MT')}>MT</option>
+          </select>
+        </td>
+        <td>
+          <select data-role="sch-day" data-idx="${idx}">
+            ${dayOptions(row.dayOfWeek)}
+          </select>
+        </td>
+        <td><input data-role="sch-start" data-idx="${idx}" type="time" value="${escapeHtml(row.startTime || '')}" /></td>
+        <td><input data-role="sch-end" data-idx="${idx}" type="time" value="${escapeHtml(row.endTime || '')}" /></td>
+        <td><input data-role="sch-active" data-idx="${idx}" type="checkbox" ${row.isActive === false ? '' : 'checked'} /></td>
+      `;
+      el.scheduleBody.appendChild(tr);
+    });
+
+    el.scheduleBody.querySelectorAll('[data-role^="sch-"]').forEach((node) => {
+      const evt = node.type === 'checkbox' ? 'change' : 'input';
+      node.addEventListener(evt, onScheduleChange);
+    });
+    applyAccessRules();
+  }
+
+  function addScheduleRow() {
+    state.teacherSchedules.push({
+      classId: '',
+      groupCode: 'BM',
+      dayOfWeek: '1',
+      startTime: '08:00',
+      endTime: '09:00',
+      isActive: true
+    });
+    renderTeacherSchedules();
+  }
+
+  function onScheduleChange(e) {
+    const idx = Number(e.target.dataset.idx);
+    const role = e.target.dataset.role;
+    const val = e.target.type === 'checkbox' ? e.target.checked : e.target.value;
+    if (role === 'sch-class') state.teacherSchedules[idx].classId = val;
+    if (role === 'sch-group') state.teacherSchedules[idx].groupCode = String(val || '').toUpperCase();
+    if (role === 'sch-day') state.teacherSchedules[idx].dayOfWeek = val;
+    if (role === 'sch-start') state.teacherSchedules[idx].startTime = val;
+    if (role === 'sch-end') state.teacherSchedules[idx].endTime = val;
+    if (role === 'sch-active') state.teacherSchedules[idx].isActive = Boolean(val);
+  }
+
+  function saveTeacherSchedules() {
+    if (!state.access.canEnterData) {
+      setScheduleStatus('Your account is not verified for data entry.', true);
+      return;
+    }
+    const rows = state.teacherSchedules
+      .filter(r => r.classId && r.groupCode && r.dayOfWeek && r.startTime && r.endTime)
+      .map(r => ({
+        id: r.id || '',
+        classId: r.classId,
+        groupCode: String(r.groupCode).toUpperCase(),
+        dayOfWeek: Number(r.dayOfWeek),
+        startTime: r.startTime,
+        endTime: r.endTime,
+        isActive: r.isActive !== false
+      }));
+    setScheduleStatus('Saving schedules...');
+    google.script.run
+      .withSuccessHandler(() => setScheduleStatus(`Saved ${rows.length} schedule row(s).`))
+      .withFailureHandler((err) => setScheduleStatus(getErrMsg(err), true))
+      .saveTeacherSchedules({ rows });
   }
 
   function renderRoster() {
@@ -343,12 +523,55 @@
     const saveBtn = document.getElementById('saveAttendanceBtn');
     const markPresentBtn = document.getElementById('markPresentBtn');
     const markAbsentBtn = document.getElementById('markAbsentBtn');
+    const saveSettingsBtn = document.getElementById('saveSettingsBtn');
+    const saveScheduleBtn = document.getElementById('saveScheduleBtn');
+    const addScheduleRowBtn = document.getElementById('addScheduleRowBtn');
     saveBtn.disabled = disabled;
     markPresentBtn.disabled = disabled;
     markAbsentBtn.disabled = disabled;
+    saveSettingsBtn.disabled = disabled;
+    saveScheduleBtn.disabled = disabled;
+    addScheduleRowBtn.disabled = disabled;
 
     el.rosterBody.querySelectorAll('select[data-role="attendance"], [data-role="kemahiran"], [data-role="mastery"], [data-role="score"], [data-role="interest"], [data-role="note"]')
       .forEach(node => node.disabled = disabled);
+    el.settingsBody.querySelectorAll('select[data-role="group-setting"]').forEach(node => node.disabled = disabled);
+    el.scheduleBody.querySelectorAll('[data-role^="sch-"]').forEach(node => node.disabled = disabled);
+  }
+
+  function setSettingsStatus(msg, isError) {
+    el.settingsStatus.textContent = msg;
+    el.settingsStatus.style.color = isError ? '#d64550' : '#6a767d';
+  }
+
+  function setScheduleStatus(msg, isError) {
+    el.scheduleStatus.textContent = msg;
+    el.scheduleStatus.style.color = isError ? '#d64550' : '#6a767d';
+  }
+
+  function normalizeGroup(mode) {
+    const raw = String(mode || '').toUpperCase();
+    if (raw === 'BOTH' || raw === 'BM_MT' || raw === 'BM+MT') return 'BOTH';
+    if (raw === 'MT') return 'MT';
+    return 'BM';
+  }
+
+  function getErrMsg(err) {
+    return (err && err.message) ? err.message : String(err);
+  }
+
+  function dayOptions(current) {
+    const days = [
+      { v: '1', t: 'Monday' },
+      { v: '2', t: 'Tuesday' },
+      { v: '3', t: 'Wednesday' },
+      { v: '4', t: 'Thursday' },
+      { v: '5', t: 'Friday' },
+      { v: '6', t: 'Saturday' },
+      { v: '7', t: 'Sunday' }
+    ];
+    const now = String(current || '1');
+    return days.map(d => `<option value="${d.v}" ${selected(now, d.v)}>${d.t}</option>`).join('');
   }
 
   function handleError(err) {

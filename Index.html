@@ -58,6 +58,8 @@
       button.danger { background: var(--danger); }
       .actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 12px; }
       .actions button { width: auto; min-width: 140px; }
+      .tab-actions { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
+      .tab-actions button { width: auto; min-width: 170px; }
       table { width: 100%; border-collapse: collapse; margin-top: 12px; }
       th, td { border-bottom: 1px solid var(--line); padding: 8px; text-align: left; vertical-align: top; }
       th { font-size: 13px; color: var(--muted); }
@@ -77,6 +79,13 @@
   </head>
   <body>
     <div class="container">
+      <div class="tab-actions">
+        <button id="openAttendanceTabBtn">Attendance</button>
+        <button id="openSettingsTabBtn" class="secondary">Settings: Student Groups</button>
+        <button id="openScheduleTabBtn" class="secondary">Settings: Teacher Schedule</button>
+      </div>
+
+      <div id="attendancePanel">
       <div class="card">
         <h1>Pemulihan Attendance + Kemahiran</h1>
         <p class="muted">Attendance sync by class and group (BM/MT), with repeat kemahiran attempts for AI intervention analysis.</p>
@@ -118,6 +127,61 @@
           </thead>
           <tbody id="rosterBody"></tbody>
         </table>
+      </div>
+      </div>
+
+      <div id="settingsPanel" class="hidden">
+        <div class="card">
+          <h1>Student Group Settings</h1>
+          <p class="muted">Set each student involvement in Pemulihan group: BM, MT, or Both.</p>
+          <div class="actions">
+            <button id="loadSettingsBtn">Load Students</button>
+            <button id="saveSettingsBtn" class="warn">Save Group Settings</button>
+          </div>
+          <div id="settingsStatus" class="status"></div>
+        </div>
+
+        <div class="card">
+          <table>
+            <thead>
+              <tr>
+                <th>Student</th>
+                <th>Class</th>
+                <th>Group Involvement</th>
+              </tr>
+            </thead>
+            <tbody id="settingsBody"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div id="schedulePanel" class="hidden">
+        <div class="card">
+          <h1>Teacher Schedule Settings</h1>
+          <p class="muted">Set recurring schedule by class and group (BM/MT). This drives attendance session loading.</p>
+          <div class="actions">
+            <button id="loadScheduleBtn">Load Schedule</button>
+            <button id="addScheduleRowBtn" class="secondary">Add Row</button>
+            <button id="saveScheduleBtn" class="warn">Save Schedule</button>
+          </div>
+          <div id="scheduleStatus" class="status"></div>
+        </div>
+
+        <div class="card">
+          <table>
+            <thead>
+              <tr>
+                <th>Class</th>
+                <th>Group</th>
+                <th>Day</th>
+                <th>Start</th>
+                <th>End</th>
+                <th>Active</th>
+              </tr>
+            </thead>
+            <tbody id="scheduleBody"></tbody>
+          </table>
+        </div>
       </div>
     </div>
 

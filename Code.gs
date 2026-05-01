@@ -8,6 +8,10 @@
  * Expected backend endpoints:
  * - GET  /meta/options
  * - GET  /auth/verify-access?email=...
+ * - GET  /students/group-settings
+ * - POST /students/group-settings/upsert
+ * - GET  /teacher-schedules
+ * - POST /teacher-schedules/upsert
  * - GET  /sessions?date=YYYY-MM-DD&teacherId=...
  * - GET  /attendance/roster?sessionId=...
  * - POST /attendance/bulk-upsert
@@ -66,17 +70,39 @@ function getAccessContext() {
 
 function getSessions(payload) {
   payload = payload || {};
-  var teacherId = payload.teacherId || getDefaultTeacherId_();
-  return apiGet('/sessions', {
-    date: payload.date,
-    teacherId: teacherId
-  });
+  var query = { date: payload.date };
+  if (payload.teacherId) {
+    query.teacherId = payload.teacherId;
+  }
+  return apiGet('/sessions', query);
 }
 
 function getAttendanceRoster(payload) {
   payload = payload || {};
   return apiGet('/attendance/roster', {
     sessionId: payload.sessionId
+  });
+}
+
+function getStudentGroupSettings() {
+  return apiGet('/students/group-settings', {});
+}
+
+function saveStudentGroupSettings(payload) {
+  payload = payload || {};
+  return apiPost('/students/group-settings/upsert', {
+    rows: payload.rows || []
+  });
+}
+
+function getTeacherSchedules() {
+  return apiGet('/teacher-schedules', {});
+}
+
+function saveTeacherSchedules(payload) {
+  payload = payload || {};
+  return apiPost('/teacher-schedules/upsert', {
+    rows: payload.rows || []
   });
 }
 
@@ -170,12 +196,4 @@ function callApi_(method, path, body, query) {
   }
 
   return json;
-}
-
-function getDefaultTeacherId_() {
-  var teacherId = PropertiesService.getScriptProperties().getProperty('DEFAULT_TEACHER_ID');
-  if (!teacherId) {
-    throw new Error('Missing Script Property: DEFAULT_TEACHER_ID');
-  }
-  return teacherId;
 }

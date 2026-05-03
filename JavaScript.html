@@ -65,7 +65,8 @@
     roster: [],
     studentGroupSettings: [],
     teacherSchedules: [],
-    dashboardData: null
+    dashboardData: null,
+    dashboardMode: 'INDIVIDU'
   };
 
   const el = {
@@ -83,7 +84,9 @@
     scheduleStatus: document.getElementById('scheduleStatus'),
     dashboardPanel: document.getElementById('dashboardPanel'),
     dashStudentSelect: document.getElementById('dashStudentSelect'),
-    dashMonthInput: document.getElementById('dashMonthInput'),
+    dashSubjectSelect: document.getElementById('dashSubjectSelect'),
+    dashIndividuControls: document.getElementById('dashIndividuControls'),
+    dashSemuaControls: document.getElementById('dashSemuaControls'),
     dashboardCards: document.getElementById('dashboardCards'),
     dashboardStatus: document.getElementById('dashboardStatus')
   };
@@ -103,12 +106,15 @@
   document.getElementById('loadScheduleBtn').addEventListener('click', loadTeacherSchedules);
   document.getElementById('addScheduleRowBtn').addEventListener('click', addScheduleRow);
   document.getElementById('saveScheduleBtn').addEventListener('click', saveTeacherSchedules);
+  document.getElementById('dashModeIndividuBtn').addEventListener('click', () => setDashboardMode('INDIVIDU'));
+  document.getElementById('dashModeSemuaBtn').addEventListener('click', () => setDashboardMode('SEMUA'));
   document.getElementById('dashPdfBtn').addEventListener('click', () => window.print());
+  document.getElementById('dashPrintBtn').addEventListener('click', () => window.print());
   document.getElementById('dashPrintAllBtn').addEventListener('click', printAllStudentsDashboard);
   el.dateInput.addEventListener('change', loadSessions);
   el.sessionSelect.addEventListener('change', loadRoster);
   el.dashStudentSelect.addEventListener('change', loadDashboard);
-  el.dashMonthInput.addEventListener('change', loadDashboard);
+  el.dashSubjectSelect.addEventListener('change', loadDashboard);
 
   bootstrap();
 
@@ -136,10 +142,6 @@
   }
 
   function initDashboardControls() {
-    const now = new Date();
-    const m = String(now.getMonth() + 1).padStart(2, '0');
-    el.dashMonthInput.value = `${now.getFullYear()}-${m}`;
-
     google.script.run
       .withSuccessHandler((res) => {
         const rows = res.rows || [];
@@ -152,29 +154,44 @@
         });
         if (rows.length) {
           el.dashStudentSelect.value = rows[0].studentId || rows[0].id;
-          loadDashboard();
         }
+        setDashboardMode('INDIVIDU');
       })
       .withFailureHandler((err) => setDashboardStatus(getErrMsg(err), true))
       .getStudentGroupSettings();
   }
 
+  function setDashboardMode(mode) {
+    state.dashboardMode = mode;
+    el.dashIndividuControls.classList.toggle('hidden', mode !== 'INDIVIDU');
+    el.dashSemuaControls.classList.toggle('hidden', mode !== 'SEMUA');
+    document.getElementById('dashModeIndividuBtn').classList.toggle('secondary', mode !== 'INDIVIDU');
+    document.getElementById('dashModeSemuaBtn').classList.toggle('secondary', mode !== 'SEMUA');
+    document.getElementById('dashPrintAllBtn').classList.toggle('hidden', mode !== 'SEMUA');
+    loadDashboard();
+  }
+
   function loadDashboard() {
     const studentId = el.dashStudentSelect.value;
-    const month = el.dashMonthInput.value;
-    if (!studentId || !month) return;
+    const subjectCode = el.dashSubjectSelect.value;
+    if (state.dashboardMode === 'INDIVIDU' && !studentId) return;
     setDashboardStatus('Memuat dashboard...');
     google.script.run
       .withSuccessHandler((res) => {
         state.dashboardData = res;
-        renderDashboard(res);
+        if (state.dashboardMode === 'INDIVIDU') renderDashboardIndividu(res);
+        else renderDashboardSemua(res);
         setDashboardStatus('Dashboard siap.');
       })
       .withFailureHandler((err) => setDashboardStatus(getErrMsg(err), true))
-      .getAttendanceDashboard({ studentId, month });
+      .getAttendanceDashboardView({
+        mode: state.dashboardMode,
+        studentId: studentId,
+        subjectCode: subjectCode
+      });
   }
 
-  function renderDashboard(data) {
+  function renderDashboardIndividu(data) {
     const subjects = (data && data.subjects) ? data.subjects : [];
     if (!subjects.length) {
       el.dashboardCards.innerHTML = '<div class="muted">Tiada data subjek untuk murid ini.</div>';
@@ -184,13 +201,13 @@
       <div class="card">
         <h3 class="kpi-title">${escapeHtml(s.code)}</h3>
         <div class="kpi-boxes">
-          <div class="kpi-box gauge" style="${gaugeStyle(s.selectedPercent)}">
-            <div class="kpi-label">Peratus Bulan Dipilih</div>
-            <div class="kpi-value">${Number(s.selectedPercent || 0)}%</div>
-          </div>
           <div class="kpi-box gauge" style="${gaugeStyle(s.totalPercent)}">
             <div class="kpi-label">Peratus Keseluruhan</div>
             <div class="kpi-value">${Number(s.totalPercent || 0)}%</div>
+          </div>
+          <div class="kpi-box">
+            <div class="kpi-label">Status Murid</div>
+            <div class="kpi-value" style="font-size:18px">${escapeHtml((data.student && data.student.status) ? data.student.status.toUpperCase() : '-')}</div>
           </div>
         </div>
         <div><strong>Kemahiran Terkini:</strong> ${escapeHtml(s.latestKemahiran || '-')}</div>
@@ -198,38 +215,49 @@
     `).join('');
   }
 
+  function renderDashboardSemua(data) {
+    const rows = (data && data.rows) ? data.rows : [];
+    const subject = (data && data.subjectCode) ? data.subjectCode : el.dashSubjectSelect.value;
+    if (!rows.length) {
+      el.dashboardCards.innerHTML = '<div class="muted">Tiada murid untuk subjek ini.</div>';
+      return;
+    }
+    const title = subject === 'MT' ? 'MATEMATIK' : 'BAHASA MELAYU';
+    el.dashboardCards.innerHTML = `
+      <div class="card" style="grid-column:1/-1">
+        <h3 class="kpi-title">${title}</h3>
+        <table>
+          <thead>
+            <tr>
+              <th>Bil</th>
+              <th>Nama</th>
+              <th>Kelas</th>
+              <th>Kehadiran</th>
+              <th>Kemahiran</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${rows.map((r, i) => `
+              <tr>
+                <td>${i + 1}</td>
+                <td>${escapeHtml(r.fullName || '-')}</td>
+                <td>${escapeHtml(r.classId || '-')}</td>
+                <td>${escapeHtml(String(r.totalAttendance || '0%'))} Kehadiran</td>
+                <td>${escapeHtml(r.latestKemahiran || '-')}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>
+    `;
+  }
+
   function printAllStudentsDashboard() {
-    const opts = Array.from(el.dashStudentSelect.options).filter(o => o.value);
-    if (!opts.length) return;
-    const month = el.dashMonthInput.value;
-    setDashboardStatus('Menjana paparan semua murid...');
-    let html = '<html><head><title>Peratus Kehadiran Semua Murid</title></head><body>';
-    const run = (i) => {
-      if (i >= opts.length) {
-        html += '</body></html>';
-        const w = window.open('', '_blank');
-        w.document.write(html);
-        w.document.close();
-        w.focus();
-        w.print();
-        setDashboardStatus('Selesai jana semua murid.');
-        return;
-      }
-      const sid = opts[i].value;
-      google.script.run
-        .withSuccessHandler((res) => {
-          const name = (res.student && res.student.fullName) ? res.student.fullName : sid;
-          html += `<h2>${escapeHtml(name)} (${escapeHtml(month)})</h2>`;
-          (res.subjects || []).forEach((s) => {
-            html += `<p><strong>${escapeHtml(s.code)}</strong> | Bulan: ${Number(s.selectedPercent || 0)}% | Total: ${Number(s.totalPercent || 0)}% | Kemahiran: ${escapeHtml(s.latestKemahiran || '-')}</p>`;
-          });
-          html += '<hr/>';
-          run(i + 1);
-        })
-        .withFailureHandler(() => run(i + 1))
-        .getAttendanceDashboard({ studentId: sid, month });
-    };
-    run(0);
+    if (state.dashboardMode !== 'SEMUA') {
+      setDashboardStatus('Gunakan mod Semua Murid untuk fungsi ini.', true);
+      return;
+    }
+    window.print();
   }
 
   function loadSessions() {

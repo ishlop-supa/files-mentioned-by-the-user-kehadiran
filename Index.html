@@ -144,18 +144,28 @@
       <div id="dashboardPanel" class="hidden">
         <div class="card">
           <h1>Peratus Kehadiran</h1>
-          <div class="grid">
+          <div class="actions">
+            <button id="dashModeIndividuBtn">Peratus Individu</button>
+            <button id="dashModeSemuaBtn" class="secondary">Semua Murid</button>
+          </div>
+          <div id="dashIndividuControls" class="grid">
             <div>
               <label for="dashStudentSelect">Pilih Murid</label>
               <select id="dashStudentSelect"></select>
             </div>
+          </div>
+          <div id="dashSemuaControls" class="grid hidden">
             <div>
-              <label for="dashMonthInput">Pilih Bulan</label>
-              <input id="dashMonthInput" type="month" />
+              <label for="dashSubjectSelect">Pilih Subjek</label>
+              <select id="dashSubjectSelect">
+                <option value="BM">BM</option>
+                <option value="MT">MT</option>
+              </select>
             </div>
           </div>
           <div class="actions">
-            <button id="dashPdfBtn" class="secondary">PDF / Print</button>
+            <button id="dashPdfBtn" class="secondary">PDF</button>
+            <button id="dashPrintBtn" class="secondary">Print</button>
             <button id="dashPrintAllBtn" class="warn">Print Semua Murid</button>
           </div>
           <div id="dashboardStatus" class="status"></div>

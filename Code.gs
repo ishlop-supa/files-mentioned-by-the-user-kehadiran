@@ -100,6 +100,94 @@ function getAttendanceDashboard(payload) {
   };
 }
 
+function getAttendanceDashboardView(payload) {
+  payload = payload || {};
+  var mode = String(payload.mode || 'INDIVIDU').toUpperCase();
+  var studentId = String(payload.studentId || '').trim();
+  var subjectCode = resolveSubjectCode_(String(payload.subjectCode || 'BM'));
+
+  var students = readObjects_('students');
+  var enrollments = readObjects_('student_group_enrollments');
+  var cumulative = readObjects_('attendance_cumulative');
+  var kemMaster = readObjects_('kemahiran_master');
+
+  var cumMap = {};
+  cumulative.forEach(function(r) {
+    cumMap[String(r.student_id || '').trim()] = r;
+  });
+
+  function latestKemahiranLabel_(raw) {
+    var v = String(raw || '').trim();
+    if (!v || v.toLowerCase() === 'no record') return 'no record';
+    var m = kemMaster.find(function(k) { return String(k.id || '') === v; });
+    if (!m) return v;
+    var code = String(m.code || '').trim();
+    var title = String(m.title || '').trim();
+    return code ? (code + '. ' + title) : title;
+  }
+
+  if (mode === 'INDIVIDU') {
+    var stu = students.find(function(s) { return String(s.id || '') === studentId; });
+    if (!stu) return { student: null, subjects: [] };
+
+    var sEnroll = enrollments.filter(function(e) {
+      return String(e.student_id || '') === studentId;
+    });
+    var hasBM = sEnroll.some(function(e) { return resolveSubjectCode_(e.subject_id || '') === 'BM'; });
+    var hasMT = sEnroll.some(function(e) { return resolveSubjectCode_(e.subject_id || '') === 'MT'; });
+    var c = cumMap[studentId] || {};
+    var total = String(c.total_attendance || c.peratus_kehadiran || c.peratus || '0%');
+    var latest = latestKemahiranLabel_(c.latest_kemahiran || c.kemahiran_terkini || 'no record');
+    var subjects = [];
+    if (hasBM) subjects.push({ code: 'BM', totalPercent: total, latestKemahiran: latest });
+    if (hasMT) subjects.push({ code: 'MT', totalPercent: total, latestKemahiran: latest });
+    return {
+      student: {
+        id: String(stu.id || ''),
+        fullName: String(stu.full_name || ''),
+        classId: String(stu.class_id || ''),
+        status: String(stu.status || 'active')
+      },
+      subjects: subjects
+    };
+  }
+
+  // SEMUA MURID mode
+  var allowedStatuses = { active: true, perdana: true };
+  var rows = [];
+  students.forEach(function(s) {
+    var status = String(s.status || 'active').toLowerCase();
+    if (!allowedStatuses[status]) return;
+    var sid = String(s.id || '');
+    var stuEnroll = enrollments.filter(function(e) {
+      return String(e.student_id || '') === sid && resolveSubjectCode_(e.subject_id || '') === subjectCode;
+    });
+    if (!stuEnroll.length) return;
+    var c = cumMap[sid] || {};
+    rows.push({
+      studentId: sid,
+      fullName: String(s.full_name || ''),
+      classId: String(s.class_id || ''),
+      totalAttendance: String(c.total_attendance || c.peratus_kehadiran || c.peratus || '0%'),
+      latestKemahiran: latestKemahiranLabel_(c.latest_kemahiran || c.kemahiran_terkini || 'no record'),
+      status: status
+    });
+  });
+
+  rows.sort(function(a, b) {
+    if (a.classId < b.classId) return -1;
+    if (a.classId > b.classId) return 1;
+    if (a.fullName < b.fullName) return -1;
+    if (a.fullName > b.fullName) return 1;
+    return 0;
+  });
+
+  return {
+    subjectCode: subjectCode,
+    rows: rows
+  };
+}
+
 function getAccessContext() {
   var email = '';
   try {
